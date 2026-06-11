@@ -376,22 +376,6 @@
             position: relative;
         }
 
-        .image-toolbar {
-            background: white;
-            padding: 10px 20px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid #e8e8e8;
-            flex-shrink: 0;
-        }
-
-        .toolbar-left {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-        }
-
         .tool-btn {
             padding: 6px 14px;
             border: 1px solid #e0e0e0;
@@ -412,33 +396,6 @@
             background: #667eea;
             border-color: #667eea;
             color: white;
-        }
-
-        .toolbar-right {
-            display: flex;
-            gap: 10px;
-            align-items: center;
-        }
-
-        .nav-btn {
-            padding: 8px 16px;
-            border: 1px solid #e0e0e0;
-            background: white;
-            border-radius: 6px;
-            cursor: pointer;
-            font-size: 13px;
-            color: #555;
-            transition: all 0.2s;
-        }
-
-        .nav-btn:hover {
-            border-color: #667eea;
-            color: #667eea;
-        }
-
-        .nav-btn:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
         }
 
         /* 图片画布区域 */
@@ -464,7 +421,7 @@
         .image-container img {
             display: block;
             max-width: 100%;
-            max-height: calc(100vh - 140px);
+            max-height: calc(100vh - 90px);
             object-fit: contain;
         }
 
@@ -535,6 +492,39 @@
             width: 100%;
             height: 100%;
             object-fit: cover;
+        }
+
+        /* 缩略图栏底部导航按钮 */
+        .thumb-nav {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #e8e8e8;
+        }
+
+        .thumb-nav-btn {
+            width: 56px;
+            padding: 8px 4px;
+            border: 1px solid #e0e0e0;
+            background: white;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 11px;
+            color: #555;
+            transition: all 0.2s;
+            text-align: center;
+        }
+
+        .thumb-nav-btn:hover {
+            border-color: #667eea;
+            color: #667eea;
+        }
+
+        .thumb-nav-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
         }
 
         /* 提示信息 */
@@ -802,16 +792,6 @@
 
         <!-- 右侧图片区域 -->
         <div class="content-area" id="contentArea" style="display:none;">
-            <div class="image-toolbar">
-                <div class="toolbar-left" style="font-size: 13px; color: #888;">
-                    🖱️ 按住鼠标左键在图片上绘制，滚轮可缩放页面
-                </div>
-                <div class="toolbar-right">
-                    <button class="nav-btn" onclick="prevImage()" id="prevBtn">← 上一张</button>
-                    <button class="nav-btn" onclick="nextImage()" id="nextBtn">下一张 →</button>
-                </div>
-            </div>
-
             <div class="canvas-wrapper">
                 <div class="image-container" id="imageContainer">
                     <img id="previewImage" src="" alt="预览图片" draggable="false">
@@ -824,6 +804,10 @@
     <!-- 缩略图栏 -->
     <div class="thumbnail-bar" id="thumbnailBar" style="display:none;">
         <!-- 动态生成 -->
+        <div class="thumb-nav">
+            <button class="thumb-nav-btn" onclick="prevImage()" id="prevBtn">↑ 上一张</button>
+            <button class="thumb-nav-btn" onclick="nextImage()" id="nextBtn">↓ 下一张</button>
+        </div>
     </div>
 
     <!-- 提示信息 -->
@@ -1002,14 +986,15 @@
         // ============ 缩略图 ============
         function initThumbnails() {
             const bar = document.getElementById('thumbnailBar');
-            bar.innerHTML = '';
+            // 只移除缩略图项，保留底部导航按钮
+            bar.querySelectorAll('.thumbnail-item').forEach(el => el.remove());
             taskItems.forEach((item, i) => {
                 const div = document.createElement('div');
                 div.className = 'thumbnail-item' + (i === 0 ? ' active' : '');
                 if (annotations[item.taskId]) div.classList.add('marked');
                 div.textContent = i + 1;
                 div.onclick = () => loadImage(i);
-                bar.appendChild(div);
+                bar.insertBefore(div, bar.querySelector('.thumb-nav'));
             });
         }
 
