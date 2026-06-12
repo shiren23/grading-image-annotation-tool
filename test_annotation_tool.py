@@ -62,6 +62,7 @@ async def inject_mock_data(page):
 
             taskItems = [
                 {
+                    id: 'db45c6d8-04ed-4a71-a7d2-2179957bd9b4',
                     taskId: 'db45c6d8-04ed-4a71-a7d2-2179957bd9b4',
                     folderPath: '未匹配/1',
                     subFolder: '未匹配',
@@ -70,6 +71,7 @@ async def inject_mock_data(page):
                     imageUrl: canvas.toDataURL('image/jpeg')
                 },
                 {
+                    id: 'bda0718b-3e30-4cc4-93b1-265eb54a86d2',
                     taskId: 'bda0718b-3e30-4cc4-93b1-265eb54a86d2',
                     folderPath: '未匹配/2',
                     subFolder: '未匹配',
@@ -78,6 +80,7 @@ async def inject_mock_data(page):
                     imageUrl: canvas2.toDataURL('image/jpeg')
                 },
                 {
+                    id: 'aabbccdd-1122-3344-5566-77889900aabb',
                     taskId: 'aabbccdd-1122-3344-5566-77889900aabb',
                     folderPath: '学生卷/张三',
                     subFolder: '学生卷',
