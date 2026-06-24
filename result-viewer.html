@@ -63,6 +63,24 @@
             opacity: 0.9;
         }
 
+        .total-badge {
+            background: rgba(255,255,255,0.15);
+            border: 1px solid rgba(255,255,255,0.25);
+            color: rgba(255,255,255,0.9);
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 13px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .total-badge .total-num {
+            color: #ffb3b3;
+            font-weight: 700;
+            font-size: 15px;
+        }
+
         /* 主体区域 */
         .main-container {
             display: flex;
@@ -569,6 +587,7 @@
     <div class="header">
         <h1>📂 标注结果查看工具</h1>
         <div class="header-controls">
+            <span class="total-badge" id="totalBadcaseInfo" style="display:none;"></span>
             <span class="stats-info" id="statsInfo">请选择标注结果文件夹</span>
             <button class="folder-select-btn" onclick="selectFolder()">📁 选择文件夹</button>
         </div>
@@ -796,6 +815,21 @@
             document.getElementById('infoPanel').style.display = 'flex';
             document.getElementById('imageNav').style.display = 'flex';
             renderTaskList();
+            updateTotalBadcase();
+        }
+
+        // ============ 统计 Badcase 总数 ============
+        function updateTotalBadcase() {
+            let total = 0;
+            let tasksWithBadcase = 0;
+            for (const item of resultItems) {
+                const c = parseInt(item.errorInfo.badcaseCount) || 0;
+                total += c;
+                if (c > 0) tasksWithBadcase++;
+            }
+            const el = document.getElementById('totalBadcaseInfo');
+            el.innerHTML = `共 <span class="total-num">${total}</span> 个 Badcase · ${tasksWithBadcase} 个任务`;
+            el.style.display = 'inline-flex';
         }
 
         // ============ 渲染任务列表 ============
