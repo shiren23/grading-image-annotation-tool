@@ -505,6 +505,49 @@
             overflow-y: auto;
             overflow-x: hidden;
             z-index: 10;
+            transition: transform 0.22s ease;
+        }
+
+        .thumbnail-bar.collapsed {
+            transform: translateX(168px);
+        }
+
+        /* 缩略图栏收起/展开按钮 */
+        .sidebar-toggle {
+            position: fixed;
+            right: 168px;
+            top: 50%;
+            transform: translateY(-50%);
+            width: 20px;
+            height: 64px;
+            background: white;
+            border: 1px solid #e8e8e8;
+            border-right: none;
+            border-radius: 6px 0 0 6px;
+            box-shadow: -2px 0 8px rgba(0,0,0,0.08);
+            cursor: pointer;
+            z-index: 11;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            color: #888;
+            font-size: 14px;
+            line-height: 1;
+            padding: 0;
+            transition: right 0.22s ease, color 0.15s, background 0.15s;
+        }
+
+        .sidebar-toggle.visible {
+            display: flex;
+        }
+
+        .sidebar-toggle.collapsed {
+            right: 0;
+        }
+
+        .sidebar-toggle:hover {
+            color: #667eea;
+            background: #f5f7ff;
         }
 
         .thumbnail-grid {
@@ -885,6 +928,9 @@
         </div>
     </div>
 
+    <!-- 缩略图栏收起/展开按钮 -->
+    <button class="sidebar-toggle" id="sidebarToggle" title="收起/展开缩略图" onclick="toggleSidebar()">›</button>
+
     <!-- 提示信息 -->
     <div class="toast" id="toast"></div>
 
@@ -1058,8 +1104,19 @@
             document.getElementById('sidebar').style.display = 'flex';
             document.getElementById('contentArea').style.display = 'flex';
             document.getElementById('thumbnailBar').style.display = 'flex';
+            document.getElementById('sidebarToggle').classList.add('visible');
             document.getElementById('exportBtn').disabled = false;
             document.getElementById('statsBadge').style.display = 'inline';
+        }
+
+        // ============ 收起/展开缩略图栏 ============
+        function toggleSidebar() {
+            const bar = document.getElementById('thumbnailBar');
+            const toggle = document.getElementById('sidebarToggle');
+            const collapsed = bar.classList.toggle('collapsed');
+            toggle.classList.toggle('collapsed', collapsed);
+            toggle.textContent = collapsed ? '‹' : '›';
+            toggle.title = collapsed ? '展开缩略图' : '收起缩略图';
         }
 
         // ============ 缩略图 ============
