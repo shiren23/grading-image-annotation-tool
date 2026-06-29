@@ -226,7 +226,11 @@
         .error-list-section {
             background: #fafbfc;
             min-height: 120px;
-            flex: 1 1 auto;
+            /* 用 flex: 0 0 auto 让本节按内容自适应高度，
+               内容增多时下方的「视图模式 / 任务信息 / 操作」自动下移，
+               超出 sidebar 时由 sidebar 的 overflow-y: auto 兜底滚动。
+               避免 flex: 1 1 auto 导致内容被父容器截断、下方 section 视觉上盖住列表。 */
+            flex: 0 0 auto;
         }
 
         .error-list-empty {

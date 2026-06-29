@@ -310,7 +310,48 @@ async def run_tests():
             print("  ✓ 视图模式切换正常")
             passed += 1
 
-            # 测试 15: 序列化为 v2 schema 格式
+            # 测试 14.5: 错误列表增多后下方 UI 不被盖住
+            print("\n[测试 14.5] 错误列表撑开后视图模式未被盖住...")
+            # 先选错误类型，再画多个 bbox 制造长列表
+            await page.locator(".error-type-btn", has_text="OCR").click()
+            await asyncio.sleep(0.2)
+            for i in range(6):
+                await draw_bbox_on_canvas(page,
+                                          50 + i * 20, 50 + i * 20,
+                                          50 + i * 20 + 60, 50 + i * 20 + 40)
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.3)
+
+            layout = await page.evaluate("""
+                () => {
+                    const sidebar = document.getElementById('sidebar');
+                    const list = document.querySelector('.error-list-section');
+                    const view = document.querySelector('.view-mode-section');
+                    const listRect = list.getBoundingClientRect();
+                    const viewRect = view.getBoundingClientRect();
+                    return {
+                        sidebarScrollH: sidebar.scrollHeight,
+                        sidebarClientH: sidebar.clientHeight,
+                        listBottom: listRect.bottom,
+                        viewTop: viewRect.top,
+                        overlap: viewRect.top - listRect.bottom,
+                    };
+                }
+            """)
+            # view-mode 顶部应在 error-list 底部之下（>= -1 容忍像素误差）
+            assert layout["viewTop"] >= layout["listBottom"] - 1, \
+                f"视图模式盖住了错误列表：viewTop={layout['viewTop']}, listBottom={layout['listBottom']}"
+            # 列表够长时 sidebar 应可滚动
+            assert layout["sidebarScrollH"] >= layout["sidebarClientH"], \
+                f"sidebar 应可滚动：scrollH={layout['sidebarScrollH']}, clientH={layout['sidebarClientH']}"
+            print(f"  ✓ 列表底={layout['listBottom']:.0f}，视图模式顶={layout['viewTop']:.0f}，无重叠；sidebar 可滚动")
+            passed += 1
+            # 清理：撤销所有框，避免影响后续测试
+            for _ in range(10):
+                await page.keyboard.press("z")
+            await asyncio.sleep(0.2)
+
+
             print("\n[测试 15] 序列化为 v2 schema...")
             v2_obj = await page.evaluate("""
                 () => {
