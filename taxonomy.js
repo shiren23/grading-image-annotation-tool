@@ -8,8 +8,9 @@ window.TAXONOMY = {
       label: "切题",
       color: "#e74c3c",
       subtypes: [
-        { id: "off_topic", label: "答非所问" },
-        { id: "incomplete", label: "未覆盖要点" }
+        { id: "off_topic", label: "未切出此题" },
+        { id: "incomplete", label: "切题不完整" },
+        { id: "uncut_legend", label: "未切出图例" }
       ]
     },
     {
@@ -41,7 +42,8 @@ window.TAXONOMY = {
       subtypes: [
         { id: "wrong_conclusion", label: "对错结论错" },
         { id: "score_wrong", label: "分数错" },
-        { id: "overlook", label: "漏判" }
+        { id: "overlook", label: "漏判" },
+        { id: "label_wrong", label: "标签错误" }
       ]
     }
   ],
