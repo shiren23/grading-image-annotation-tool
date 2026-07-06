@@ -39,7 +39,9 @@ def start_server():
 
 
 async def inject_mock_data(page):
-    """注入 3 张模拟图片，绕过文件选择"""
+    """注入 3 张模拟图片，绕过文件选择。
+    每张图独立成卷（paperId == taskId），便于绝大多数测试不依赖多图卷语义。
+    多图卷场景由专门的测试动态构造。"""
     await page.evaluate("""
         async () => {
             const makeImg = async (text, bg, name) => {
@@ -56,17 +58,35 @@ async def inject_mock_data(page):
             const img1 = await makeImg('Mock 1', '#f5f5f5', '1.jpg');
             const img2 = await makeImg('Mock 2', '#e8f4f8', '2.jpg');
             const img3 = await makeImg('Mock 3', '#fff5f5', '张三.jpg');
-            taskItems = [
-                { id: 'db45c6d8-04ed-4a71-a7d2-2179957bd9b4', taskId: 'db45c6d8-04ed-4a71-a7d2-2179957bd9b4',
-                  folderPath: '未匹配/1', imageName: '1.jpg', imageUrl: img1.url, imageFile: img1.file,
-                  metadata: { task_ids: ['db45c6d8-04ed-4a71-a7d2-2179957bd9b4'] } },
-                { id: 'bda0718b-3e30-4cc4-93b1-265eb54a86d2', taskId: 'bda0718b-3e30-4cc4-93b1-265eb54a86d2',
-                  folderPath: '未匹配/2', imageName: '2.jpg', imageUrl: img2.url, imageFile: img2.file,
-                  metadata: { task_ids: ['bda0718b-3e30-4cc4-93b1-265eb54a86d2'] } },
-                { id: 'aabbccdd-1122-3344-5566-77889900aabb', taskId: 'aabbccdd-1122-3344-5566-77889900aabb',
-                  folderPath: '学生卷/张三', imageName: '张三.jpg', imageUrl: img3.url, imageFile: img3.file,
-                  metadata: { task_ids: ['aabbccdd-1122-3344-5566-77889900aabb'] } }
+            const defs = [
+                { taskId: 'db45c6d8-04ed-4a71-a7d2-2179957bd9b4',
+                  folderPath: '未匹配/1', imageName: '1.jpg', img: img1 },
+                { taskId: 'bda0718b-3e30-4cc4-93b1-265eb54a86d2',
+                  folderPath: '未匹配/2', imageName: '2.jpg', img: img2 },
+                { taskId: 'aabbccdd-1122-3344-5566-77889900aabb',
+                  folderPath: '学生卷/张三', imageName: '张三.jpg', img: img3 }
             ];
+            taskItems = [];
+            papers = {};
+            for (const d of defs) {
+                const itemId = d.taskId;  // 单图卷：itemId == paperId == taskId
+                taskItems.push({
+                    id: itemId, taskId: d.taskId, paperId: d.taskId, paperImageIndex: 0,
+                    folderPath: d.folderPath, imageName: d.imageName,
+                    imageUrl: d.img.url, imageFile: d.img.file,
+                    metadata: { task_ids: [d.taskId] }
+                });
+                papers[d.taskId] = {
+                    paperId: d.taskId,
+                    imageIds: [itemId],
+                    questionList: [],
+                    judgments: {},
+                    vlmInFlight: false,
+                    error: null,
+                    identifiedAt: null,
+                    vlmModelId: null
+                };
+            }
             initUI();
             initThumbnails();
             loadImage(0);
@@ -454,9 +474,10 @@ async def run_tests():
             print("  ✓ v2 schema 序列化正确")
             passed += 1
 
-            # 测试 16: 导出 ZIP 结构（含全部图片：annotated + no_badcase）
-            print("\n[测试 16] 导出 ZIP 结构（全部图片）...")
+            # 测试 16: 导出 ZIP 结构（含全部图片 + paper.json + page_N 子目录）
+            print("\n[测试 16] 导出 ZIP 结构（全部图片 + paper.json）...")
             total_images = await page.evaluate("() => taskItems.length")
+            total_papers = await page.evaluate("() => Object.keys(papers).length")
             async with page.expect_download() as download_info:
                 await page.locator("#exportBtn").click(force=True)
             download = await download_info.value
@@ -466,16 +487,24 @@ async def run_tests():
                 assert any("_session.json" in n for n in names), f"ZIP 应含 _session.json，实际: {names}"
                 assert any("_stats.jsonl" in n for n in names), f"ZIP 应含 _stats.jsonl，实际: {names}"
                 assert any("taxonomy.json" in n for n in names), f"ZIP 应含 taxonomy.json，实际: {names}"
-                assert any("annotations/default.json" in n for n in names), f"ZIP 应含 annotations/default.json，实际: {names}"
-                assert any("source." in n for n in names), f"ZIP 应含 source.* 图片，实际: {names}"
-                # 不应再有 error_info.txt 或 marked_*.jpg
-                assert not any("error_info.txt" in n for n in names), "新格式不应含 error_info.txt"
-                assert not any(n.startswith("marked_") for n in names), "新格式不应含 marked_*.jpg"
-
-                # 关键：所有图片都应被导出，不论是否标注
+                # 新结构：每卷有 paper.json，每图在 page_N/annotations/default.json
+                paper_jsons = [n for n in names if n.endswith("/paper.json")]
+                assert len(paper_jsons) == total_papers, \
+                    f"应导出 {total_papers} 个 paper.json（每卷一个），实际: {len(paper_jsons)}: {paper_jsons}"
                 default_jsons = [n for n in names if n.endswith("annotations/default.json")]
                 assert len(default_jsons) == total_images, \
                     f"应导出全部 {total_images} 张图，实际 default.json 数: {len(default_jsons)}"
+                # 每张图应在 page_N/ 子目录下
+                for n in default_jsons:
+                    assert "/page_" in n and "/annotations/default.json" in n, \
+                        f"default.json 应在 page_N/ 子目录下: {n}"
+                # source 文件也应在 page_N/ 下
+                source_files = [n for n in names if "/source." in n]
+                assert len(source_files) == total_images, \
+                    f"应导出 {total_images} 个 source 文件，实际: {len(source_files)}"
+                # 不应再有 error_info.txt 或 marked_*.jpg
+                assert not any("error_info.txt" in n for n in names), "新格式不应含 error_info.txt"
+                assert not any(n.startswith("marked_") for n in names), "新格式不应含 marked_*.jpg"
 
                 # 验证 _session.json 内容
                 session_data = json.loads(zf.read("_session.json"))
@@ -489,13 +518,25 @@ async def run_tests():
                 assert status_count["no_badcase"] == total_images - 1, \
                     f"no_badcase 应为 {total_images - 1}，实际: {status_count.get('no_badcase')}"
                 assert status_count.get("pending", 0) == 0, f"导出后应无 pending，实际: {status_count.get('pending')}"
+                # _session.json 应有 papers 数组 + images[].paper_id/page_index
+                assert "papers" in session_data, f"_session.json 应有 papers 数组，实际字段: {list(session_data.keys())}"
+                assert len(session_data["papers"]) == total_papers
+                for img in session_data["images"]:
+                    assert "paper_id" in img, f"image 缺 paper_id: {img}"
+                    assert "page_index" in img, f"image 缺 page_index: {img}"
+                    assert "annotation_file" in img and "/page_" in img["annotation_file"], \
+                        f"annotation_file 应在 page_N 子目录: {img}"
 
-                # 验证每个 default.json 的 status 合法，且 annotated 项 errors 非空
+                # 验证每个 default.json：image 段应有 paper_id + page_index；annotation 不应有 judgments
                 seen_statuses = []
                 for n in default_jsons:
                     ann_data = json.loads(zf.read(n))
                     assert ann_data["schema_version"] == "1.0"
+                    assert "paper_id" in ann_data["image"], f"image 段应有 paper_id: {n}"
+                    assert "page_index" in ann_data["image"], f"image 段应有 page_index: {n}"
                     assert "errors" in ann_data["annotation"]
+                    assert "judgments" not in ann_data["annotation"], \
+                        f"v2+ image-level annotation 不应含 judgments（已迁 paper.json）: {n}"
                     status = ann_data["annotation"]["status"]
                     assert status in ("annotated", "no_badcase"), \
                         f"非法 status: {status}，文件: {n}"
@@ -508,7 +549,18 @@ async def run_tests():
                             f"no_badcase 项 errors 应为空: {n}"
                 assert "annotated" in seen_statuses, "应至少有一个 annotated 项"
                 assert "no_badcase" in seen_statuses, "应至少有一个 no_badcase 项"
-            print(f"  ✓ 导出全部 {total_images} 张图（1 annotated + {total_images-1} no_badcase），无 error_info.txt / marked_*.jpg")
+
+                # paper.json 应有 schema_version, paper_id, image_count, questions, judgments, images
+                for n in paper_jsons:
+                    pdata = json.loads(zf.read(n))
+                    assert pdata["schema_version"] == "1.0"
+                    assert "paper_id" in pdata
+                    assert "image_count" in pdata and isinstance(pdata["image_count"], int)
+                    assert "questions" in pdata and isinstance(pdata["questions"], list)
+                    assert "judgments" in pdata and isinstance(pdata["judgments"], list)
+                    assert "images" in pdata and isinstance(pdata["images"], list)
+                    assert len(pdata["images"]) == pdata["image_count"]
+            print(f"  ✓ 导出全部 {total_images} 张图 / {total_papers} 卷（paper.json + page_N 子目录），无 judgments 在 image-level")
             passed += 1
 
             # 测试 17: VLM 设置面板（开/存/读）
@@ -541,18 +593,19 @@ async def run_tests():
             print("  ✓ 设置面板：开/存/读完整，齿轮 has-config 标记正确")
             passed += 1
 
-            # 测试 18: 题号按钮三态循环点击
-            print("\n[测试 18] 题号按钮三态循环...")
-            # Stub callVLM，避免真实网络调用
+            # 测试 18: 题号按钮三态循环点击（per-paper）
+            print("\n[测试 18] 题号按钮三态循环（per-paper）...")
+            # Stub callVLMPaper，避免真实网络调用
             await page.evaluate("""
                 () => {
-                    callVLM = async (file, signal) => ({
+                    callVLMPaper = async (paper, signal) => ({
                         ok: true,
                         items: [
                             {question_no:'1(1)'},
                             {question_no:'1(2)'},
                             {question_no:'2'}
-                        ]
+                        ],
+                        modelId: 'doubao-test'
                     });
                 }
             """)
@@ -579,58 +632,135 @@ async def run_tests():
             await btns.nth(0).click()
             cls = await btns.nth(0).get_attribute("class")
             assert cls == "qbtn", f"第 3 次点击应回到 unmarked，class={cls}"
-            # judgments 同步进 annotations[item.id]
-            judgments_in_ann = await page.evaluate("""() => {
-                const item = taskItems[currentIndex];
-                return annotations[item.id]?.annotation?.judgments || [];
-            }""")
-            assert judgments_in_ann == [], f"unmarked 后 judgments 应清空，实际: {judgments_in_ann}"
+            # judgments 应从 paper.judgments 移除
+            paper_id = await page.evaluate("() => taskItems[currentIndex].paperId")
+            judgments_in_paper = await page.evaluate("""(pid) =>
+                Object.entries(papers[pid].judgments).map(([q,s]) => ({question_no:q, status:s}))
+            """, paper_id)
+            assert judgments_in_paper == [], f"unmarked 后 paper.judgments 应清空，实际: {judgments_in_paper}"
 
             # 点第 2 个按钮到 correct，验证保留
             await btns.nth(1).click()
-            judgments_in_ann = await page.evaluate("""() => {
-                const item = taskItems[currentIndex];
-                return annotations[item.id]?.annotation?.judgments || [];
-            }""")
-            assert any(j["question_no"]=="1(2)" and j["status"]=="correct" for j in judgments_in_ann), \
-                f"第 2 个按钮的 correct 应同步到 judgments，实际: {judgments_in_ann}"
-            print("  ✓ 三态循环 unmarked→correct→wrong→unmarked + judgments 同步")
+            judgments_in_paper = await page.evaluate("""(pid) =>
+                Object.entries(papers[pid].judgments).map(([q,s]) => ({question_no:q, status:s}))
+            """, paper_id)
+            assert any(j["question_no"]=="1(2)" and j["status"]=="correct" for j in judgments_in_paper), \
+                f"第 2 个按钮的 correct 应同步到 paper.judgments，实际: {judgments_in_paper}"
+            # judgments 应已持久化到 localStorage vlmJudgments:<paper_id>
+            ls_judgments = await page.evaluate("""(pid) =>
+                JSON.parse(localStorage.getItem('vlmJudgments:' + pid) || '[]')
+            """, paper_id)
+            assert any(j["question_no"]=="1(2)" and j["status"]=="correct" for j in ls_judgments), \
+                f"judgments 应持久化到 vlmJudgments:<paper_id>，实际: {ls_judgments}"
+            print("  ✓ 三态循环 unmarked→correct→wrong→unmarked + paper.judgments 同步 + localStorage 持久化")
             passed += 1
 
-            # 测试 19: serializeAnnotation 含 judgments 字段
-            print("\n[测试 19] serializeAnnotation 含 judgments...")
+            # 测试 19: serializeAnnotation 不含 judgments，image 段含 paper_id + page_index
+            print("\n[测试 19] serializeAnnotation 字段（v2+ paper schema）...")
             v2_obj = await page.evaluate("""
                 () => {
                     const item = taskItems[currentIndex];
                     return serializeAnnotation(item, {
                         status: 'annotated',
                         errors: [],
-                        judgments: [
-                            {question_no:'1', status:'correct'},
-                            {question_no:'2', status:'wrong'}
-                        ],
                         startedAt: '2026-06-29T10:00:00Z',
                         savedAt: '2026-06-29T10:01:00Z',
                         durationMs: 60000
                     });
                 }
             """)
-            assert "judgments" in v2_obj["annotation"], "annotation 缺 judgments 字段"
-            assert len(v2_obj["annotation"]["judgments"]) == 2
-            assert v2_obj["annotation"]["judgments"][0]["question_no"] == "1"
-            assert v2_obj["annotation"]["judgments"][0]["status"] == "correct"
-            # 缺 judgments 参数应兜底为空数组
-            v2_no_j = await page.evaluate("""
-                () => {
-                    const item = taskItems[currentIndex];
-                    return serializeAnnotation(item, {
-                        status: 'no_badcase', errors: [],
-                        startedAt:'t', savedAt:'t', durationMs:0
+            # v2+：annotation 不再含 judgments（迁到 paper.json）
+            assert "judgments" not in v2_obj["annotation"], \
+                f"annotation 不应含 judgments（已迁 paper.json）: {v2_obj['annotation']}"
+            # v2+：image 段含 paper_id + page_index
+            assert "paper_id" in v2_obj["image"], f"image 段应有 paper_id: {v2_obj['image']}"
+            assert "page_index" in v2_obj["image"], f"image 段应有 page_index: {v2_obj['image']}"
+            # 仍保留 task_id（向后兼容）
+            assert "task_id" in v2_obj["image"]
+            # 注入的 mock 数据是单图卷，page_index 应为 0
+            assert v2_obj["image"]["page_index"] == 0
+            assert v2_obj["image"]["paper_id"] == v2_obj["image"]["task_id"]
+            print("  ✓ serializeAnnotation: 无 judgments，image 含 paper_id + page_index")
+            passed += 1
+
+            # 测试 18a: 多图卷——同卷两图共享 paper.judgments 和 questionList
+            print("\n[测试 18a] 多图卷：同卷两图共享 paper 状态...")
+            # 动态构造一个 2 图卷场景：替换 taskItems + papers
+            await page.evaluate("""
+                async () => {
+                    const makeImg = async (text, bg, name) => {
+                        const c = document.createElement('canvas');
+                        c.width = 800; c.height = 600;
+                        const cx = c.getContext('2d');
+                        cx.fillStyle = bg; cx.fillRect(0, 0, 800, 600);
+                        cx.fillStyle = '#333'; cx.font = '20px sans-serif';
+                        cx.fillText(text, 300, 300);
+                        const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.9));
+                        const file = new File([blob], name, { type: 'image/jpeg' });
+                        return { url: URL.createObjectURL(file), file };
+                    };
+                    const imgA = await makeImg('Page 1', '#f5f5f5', 'page1.jpg');
+                    const imgB = await makeImg('Page 2', '#e8f4f8', 'page2.jpg');
+                    const PAPER_ID = 'multi-paper-uuid-aaaa-bbbb-cccc-dddddddddd';
+                    taskItems = [
+                        { id: `${PAPER_ID}__img_0`, taskId: PAPER_ID, paperId: PAPER_ID, paperImageIndex: 0,
+                          folderPath: '未匹配/multi', imageName: 'page1.jpg',
+                          imageUrl: imgA.url, imageFile: imgA.file,
+                          metadata: { task_ids: [PAPER_ID] } },
+                        { id: `${PAPER_ID}__img_1`, taskId: PAPER_ID, paperId: PAPER_ID, paperImageIndex: 1,
+                          folderPath: '未匹配/multi', imageName: 'page2.jpg',
+                          imageUrl: imgB.url, imageFile: imgB.file,
+                          metadata: { task_ids: [PAPER_ID] } }
+                    ];
+                    papers = {};
+                    papers[PAPER_ID] = {
+                        paperId: PAPER_ID,
+                        imageIds: [`${PAPER_ID}__img_0`, `${PAPER_ID}__img_1`],
+                        questionList: [], judgments: {}, vlmInFlight: false, error: null,
+                        identifiedAt: null, vlmModelId: null
+                    };
+                    // stub callVLMPaper 返回跨页题号
+                    callVLMPaper = async (paper, signal) => ({
+                        ok: true,
+                        items: [
+                            {question_no:'1'},
+                            {question_no:'1(1)'},
+                            {question_no:'1(2)'},
+                            {question_no:'2'}
+                        ],
+                        modelId: 'doubao-test'
                     });
+                    initThumbnails();
+                    loadImage(0);
                 }
             """)
-            assert v2_no_j["annotation"]["judgments"] == [], "judgments 默认应为空数组"
-            print("  ✓ serializeAnnotation 正确处理 judgments（含/缺）")
+            await page.wait_for_function("() => document.getElementById('previewImage').naturalWidth > 0", timeout=3000)
+            # 等 VLM stub 返回
+            await page.wait_for_function("document.querySelectorAll('.qbtn').length === 4", timeout=3000)
+            # 在 page 0 上点第 1 个按钮到 correct
+            btns = page.locator(".qbtn")
+            await btns.nth(0).click()
+            cls0 = await btns.nth(0).get_attribute("class")
+            assert "correct" in cls0, f"page 0 点击应切 correct，class={cls0}"
+            # 切到 page 1（同卷），应看到同一组题号 + 第 1 个按钮仍是 correct
+            await page.evaluate("() => loadImage(1)")
+            await page.wait_for_function("() => document.querySelectorAll('.qbtn').length === 4", timeout=3000)
+            btns2 = page.locator(".qbtn")
+            cls1 = await btns2.nth(0).get_attribute("class")
+            assert "correct" in cls1, f"page 1（同卷）应共享 paper.judgments，第 1 个按钮应仍为 correct，class={cls1}"
+            # 切回 page 0，仍 correct
+            await page.evaluate("() => loadImage(0)")
+            await page.wait_for_function("() => document.querySelectorAll('.qbtn').length === 4", timeout=3000)
+            btns3 = page.locator(".qbtn")
+            cls0b = await btns3.nth(0).get_attribute("class")
+            assert "correct" in cls0b, f"切回 page 0 应保留 correct，class={cls0b}"
+            # 多图卷：callVLMPaper 应只被调用 1 次（卷级，不是图级）
+            call_count = await page.evaluate("""() => {
+                const paper = papers[Object.keys(papers)[0]];
+                return paper.identifiedAt ? 1 : 0;
+            }""")
+            assert call_count == 1, f"多图卷应只调用 1 次 VLM，实际 identifiedAt 设置次数: {call_count}"
+            print("  ✓ 多图卷：同卷两图共享 questionList + judgments，VLM 只调 1 次")
             passed += 1
 
             # 测试 20: parseQuestionList 防御式解析

@@ -237,6 +237,19 @@
             white-space: nowrap;
         }
 
+        .task-page-tag {
+            display: inline-block;
+            margin-left: 6px;
+            padding: 0 5px;
+            font-size: 10px;
+            line-height: 1.6;
+            border-radius: 8px;
+            background: #eef1f6;
+            color: #4a5568;
+            font-weight: 500;
+            vertical-align: middle;
+        }
+
         .badge {
             flex-shrink: 0;
             margin-left: 6px;
@@ -1165,12 +1178,15 @@
             folderInput.value = '';
         });
 
-        // ============ 解析结果文件夹（双路：JSON 优先 + 旧 txt 回退） ============
+        // ============ 解析结果文件夹（三路：paper.json + JSON + 旧 txt 回退） ============
         async function parseResultFolder(files) {
             resultItems = [];
 
-            // 按路径分组。新格式：<root>/<task_id>/annotations/default.json + source.<ext>
-            // 旧格式：<root>/<task_id>/(marked_*.jpg + error_info.txt)
+            // 按一级子目录（task_id 文件夹）分组。
+            // 三种格式：
+            //   v3 卷级：<root>/<paper_id>/paper.json + <paper_id>/page_N/annotations/default.json + page_N/source.<ext>
+            //   v2 单图：<root>/<task_id>/annotations/default.json + source.<ext>
+            //   legacy：<root>/<task_id>/(marked_*.jpg + error_info.txt)
             const dirMap = {};
             for (const file of files) {
                 const parts = file.webkitRelativePath.split('/');
@@ -1185,12 +1201,108 @@
 
             for (const key in dirMap) {
                 const dir = dirMap[key];
-                const item = await parseDirToItem(dir);
-                if (item) resultItems.push(item);
+                const paperJsonFile = dir.files.find(f => f.name === 'paper.json'
+                    && f.webkitRelativePath.split('/').length === 3);
+                if (paperJsonFile) {
+                    // v3 卷级
+                    const items = await parsePaperDir(paperJsonFile, dir);
+                    resultItems.push(...items);
+                } else {
+                    // v2 单图 / legacy
+                    const item = await parseDirToItem(dir);
+                    if (item) resultItems.push(item);
+                }
             }
 
             sortResultItemsByBadcase();
             applyLocalEdits();
+        }
+
+        // v3 卷级解析：每页一个 item，共享同一 paper 对象（questions + judgments）
+        async function parsePaperDir(paperJsonFile, dir) {
+            let paper;
+            try {
+                paper = JSON.parse(await readFileAsText(paperJsonFile));
+            } catch (err) {
+                console.warn('paper.json 解析失败:', err, dir.folderName);
+                return [];
+            }
+            // 找所有 page_N 子目录的 default.json + source.<ext>
+            // 每个文件路径形如：<root>/<paper_id>/page_N/annotations/default.json
+            const pageMap = {};  // pageIdx(1-based) -> { jsonFile, sourceFile }
+            for (const f of dir.files) {
+                const m = f.webkitRelativePath.match(/\/page_(\d+)\/(.+)$/);
+                if (!m) continue;
+                const pageIdx = parseInt(m[1], 10);
+                const tail = m[2];
+                if (!pageMap[pageIdx]) pageMap[pageIdx] = {};
+                if (tail === 'annotations/default.json') pageMap[pageIdx].jsonFile = f;
+                else if (/^source\./i.test(tail) && isImageFile(tail)) pageMap[pageIdx].sourceFile = f;
+                else if (tail.startsWith('marked_') && isImageFile(tail) && !pageMap[pageIdx].sourceFile) {
+                    pageMap[pageIdx].sourceFile = f;
+                }
+            }
+
+            // paper.judgments 可能是数组（来自导出）—— 转成对象引用方便共享
+            const paperObj = {
+                paper_id: paper.paper_id || dir.folderName,
+                questions: Array.isArray(paper.questions) ? paper.questions : [],
+                judgments: Array.isArray(paper.judgments) ? paper.judgments : [],
+                identified_at: paper.identified_at || null,
+                vlm_model_id: paper.vlm_model_id || null,
+                image_count: paper.image_count || 0,
+                images_meta: Array.isArray(paper.images) ? paper.images : []
+            };
+
+            const items = [];
+            const pageIndices = Object.keys(pageMap).map(Number).sort((a, b) => a - b);
+            for (const pageIdx of pageIndices) {
+                const { jsonFile, sourceFile } = pageMap[pageIdx];
+                if (!jsonFile) continue;
+                let data;
+                try {
+                    data = JSON.parse(await readFileAsText(jsonFile));
+                } catch (err) {
+                    console.warn(`page_${pageIdx} default.json 解析失败:`, err);
+                    continue;
+                }
+                const imageUrl = sourceFile ? URL.createObjectURL(sourceFile) : '';
+                const taskId = (data.image && data.image.task_id) || paperObj.paper_id;
+                const annotation = JSON.parse(JSON.stringify(data.annotation || { status: 'pending', errors: [] }));
+                normalizeAnnotationStatus(annotation);
+                items.push({
+                    taskId,
+                    paperId: (data.image && data.image.paper_id) || paperObj.paper_id,
+                    pageIndex: (data.image && typeof data.image.page_index === 'number')
+                        ? data.image.page_index
+                        : pageIdx - 1,
+                    paper: paperObj,
+                    folderName: dir.folderName,
+                    imageName: sourceFile ? sourceFile.name : '',
+                    imageFile: sourceFile || null,
+                    imageUrl,
+                    schemaVersion: data.schema_version || '1.0',
+                    source: 'v3',
+                    annotation
+                });
+            }
+            // 若 pageMap 为空（只有 paper.json），至少给一个占位 item 以便用户看到卷信息
+            if (items.length === 0) {
+                items.push({
+                    taskId: paperObj.paper_id,
+                    paperId: paperObj.paper_id,
+                    pageIndex: 0,
+                    paper: paperObj,
+                    folderName: dir.folderName,
+                    imageName: '',
+                    imageFile: null,
+                    imageUrl: '',
+                    schemaVersion: '1.0',
+                    source: 'v3',
+                    annotation: { status: 'no_badcase', errors: [] }
+                });
+            }
+            return items;
         }
 
         // 排序：有 badcase 优先，无 badcase 次之；组内保留原顺序（Array.prototype.sort 在主流引擎稳定）
@@ -1422,8 +1534,14 @@
                     ? `<span class="badge badge-badcase">${errorCount} 个错误</span>`
                     : `<span class="badge badge-clean">无 badcase</span>`;
 
+                // 多页卷：显示 page N/M 区分同卷不同页
+                let pageTag = '';
+                if (item.paper && item.paper.image_count > 1) {
+                    pageTag = ` <span class="task-page-tag">P${(item.pageIndex ?? 0) + 1}/${item.paper.image_count}</span>`;
+                }
+
                 div.innerHTML = `
-                    <div class="task-id">${escapeHtml(item.taskId)}</div>
+                    <div class="task-id">${escapeHtml(item.taskId)}${pageTag}</div>
                     <div class="task-meta">
                         <span class="task-image-name">${escapeHtml(item.imageName || '-')}</span>
                         ${badgeHtml}
@@ -1557,7 +1675,7 @@
                     </div>
                 </div>
 
-                ${renderJudgmentsCard(ann.judgments)}
+                ${renderJudgmentsCard(item.paper && item.paper.judgments)}
 
                 <div class="info-section">
                     <div class="info-section-title">详细信息</div>
@@ -1864,10 +1982,12 @@
         }
 
         function serializeAnnotationForExport(item) {
-            // 保留原 schema 的 image 段（如果 v2 有）；legacy 走兜底
+            // v2+ schema：image.paper_id + page_index 加在 image 段，judgments 不再写在 image-level annotation 里
             const ann = item.annotation;
             const baseImage = {
                 task_id: item.taskId,
+                paper_id: item.paperId || item.taskId,
+                page_index: item.pageIndex ?? 0,
                 source_path: item.imageName ? `${item.folderName}/${item.imageName}` : item.folderName,
                 source_hash: null,
                 width: img.naturalWidth || null,
@@ -1899,10 +2019,6 @@
                         updated_at: e.updated_at || new Date().toISOString(),
                         duration_ms: e.duration_ms || null
                     })),
-                    judgments: Array.isArray(ann.judgments)
-                        ? ann.judgments.map(j => ({ question_no: j.question_no, status: j.status || 'unmarked' }))
-                            .filter(j => j.question_no)
-                        : [],
                     session_id: ann.session_id || null,
                     annotator_id: ann.annotator_id || ANNOTATOR_ID,
                     started_at: ann.started_at || null,

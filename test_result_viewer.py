@@ -486,27 +486,40 @@ async def run_tests():
             print(f"  ✓ 排序正确（badcase 优先），徽章 + 统计同步更新")
             passed += 1
 
-            # ============ 测试 17: judgments 卡片渲染 ============
-            print("\n[测试 17] judgments 卡片...")
+            # ============ 测试 17: judgments 卡片渲染（v3 paper.judgments） ============
+            print("\n[测试 17] judgments 卡片（来自 paper.judgments）...")
             await page.evaluate("""
                 async () => {
                     const canvas = document.createElement('canvas');
                     canvas.width = 800; canvas.height = 600;
                     const dataUrl = canvas.toDataURL('image/jpeg');
 
+                    // v3 格式：judgments 在 paper 对象上，不在 annotation 上
+                    const paper = {
+                        paper_id: 'judge-test',
+                        questions: [{question_no:'1(1)'},{question_no:'1(2)'},{question_no:'2'},{question_no:'3'}],
+                        judgments: [
+                            {question_no:'1(1)', status:'correct'},
+                            {question_no:'1(2)', status:'wrong'},
+                            {question_no:'2',   status:'unmarked'},
+                            {question_no:'3',   status:'correct'}
+                        ],
+                        identified_at: '2026-07-06T10:00:00Z',
+                        vlm_model_id: 'doubao-test',
+                        image_count: 1,
+                        images_meta: []
+                    };
                     resultItems = [
                         {
-                            taskId: 'judge-test', folderName: 'judge-test', imageName: 'source.jpg',
-                            imageUrl: dataUrl, schemaVersion: '1.0', source: 'v2',
+                            taskId: 'judge-test',
+                            paperId: 'judge-test',
+                            pageIndex: 0,
+                            paper: paper,
+                            folderName: 'judge-test', imageName: 'source.jpg',
+                            imageUrl: dataUrl, schemaVersion: '1.0', source: 'v3',
                             annotation: {
                                 status: 'annotated',
                                 errors: [],
-                                judgments: [
-                                    {question_no:'1(1)', status:'correct'},
-                                    {question_no:'1(2)', status:'wrong'},
-                                    {question_no:'2',   status:'unmarked'},
-                                    {question_no:'3',   status:'correct'}
-                                ],
                                 session_id:'s', annotator_id:'default',
                                 started_at:'2026-06-10T12:00:00Z',
                                 saved_at:'2026-06-10T12:01:00Z'
@@ -525,11 +538,6 @@ async def run_tests():
             chips = page.locator(".jchip")
             await expect(chips).to_have_count(4)
 
-            # 状态色：correct/wrong/unmarked
-            chip_classes = await page.evaluate("""
-                () => Array.from(document.querySelectorAll('.jchip'))
-                          .map(el => el.className)
-            """)
             # 题号 + 类
             chip_data = await page.evaluate("""
                 () => Array.from(document.querySelectorAll('.jchip'))
@@ -551,7 +559,106 @@ async def run_tests():
             """)
             assert '共 4 题' in jsummary and '对 2' in jsummary and '错 1' and '未判 1' in jsummary, \
                 f"摘要行错误：{jsummary}"
-            print(f"  ✓ judgments 卡片渲染正确（4 chips，状态色 + 摘要对齐）")
+            print(f"  ✓ paper.judgments 卡片渲染正确（4 chips，状态色 + 摘要对齐）")
+            passed += 1
+
+            # ============ 测试 18: parsePaperDir 解析 v3 卷级 ZIP ============
+            print("\n[测试 18] parsePaperDir 解析（v3 paper.json + page_N）...")
+            paper_count_before = await page.evaluate("() => resultItems.length")
+            # 直接通过 evaluate 测试 parsePaperDir 的解析逻辑
+            parsed = await page.evaluate("""
+                async () => {
+                    // 模拟从 ZIP 解出来的 dir 对象
+                    const paperJson = {
+                        schema_version: '1.0',
+                        paper_id: 'paper-xyz',
+                        image_count: 2,
+                        questions: [{question_no:'1'},{question_no:'1(1)'},{question_no:'2'}],
+                        judgments: [{question_no:'1',status:'correct'}],
+                        identified_at: '2026-07-06T10:00:00Z',
+                        vlm_model_id: 'doubao-test',
+                        images: [
+                            {page_index:0, task_id:'paper-xyz', source_path:'p/page1.jpg',
+                             source_hash:'sha256:abc', status:'annotated', error_count:1,
+                             annotation_file:'paper-xyz/page_1/annotations/default.json'},
+                            {page_index:1, task_id:'paper-xyz', source_path:'p/page2.jpg',
+                             source_hash:'sha256:def', status:'no_badcase', error_count:0,
+                             annotation_file:'paper-xyz/page_2/annotations/default.json'}
+                        ]
+                    };
+                    // 模拟两页文件
+                    const canvas = document.createElement('canvas');
+                    canvas.width = 100; canvas.height = 100;
+                    const blob = await new Promise(res => canvas.toBlob(res, 'image/jpeg'));
+                    const file1 = new File([blob], 'source.jpg', {type:'image/jpeg'});
+                    const file2 = new File([blob], 'source.jpg', {type:'image/jpeg'});
+                    // webkitRelativePath 模拟
+                    Object.defineProperty(file1, 'webkitRelativePath',
+                        {value:'root/paper-xyz/page_1/source.jpg'});
+                    Object.defineProperty(file2, 'webkitRelativePath',
+                        {value:'root/paper-xyz/page_2/source.jpg'});
+                    // 模拟 default.json 内容
+                    const ann1 = {
+                        schema_version:'1.0',
+                        image: {task_id:'paper-xyz', paper_id:'paper-xyz', page_index:0,
+                                source_path:'p/page1.jpg', source_hash:'sha256:abc',
+                                width:null, height:null, metadata:{task_ids:['paper-xyz']}},
+                        annotation: {status:'annotated', errors:[{
+                            error_id:'err_01', error_type:'ocr', error_subtype:null,
+                            severity:null, comment:'test', marks:[{mark_id:'m', role:'primary',
+                            type:'bbox', geometry:{bbox:[0,0,10,10], points:null},
+                            color:'#3498db', width:2}], annotator_id:'default',
+                            created_at:'t', updated_at:'t', duration_ms:0
+                        }], session_id:'s', annotator_id:'default',
+                            started_at:'t', saved_at:'t', total_duration_ms:0, client:{}}
+                    };
+                    const ann2 = JSON.parse(JSON.stringify(ann1).replace('"page_index":0', '"page_index":1'));
+                    ann2.annotation.errors = [];
+                    ann2.annotation.status = 'no_badcase';
+                    // 构造 paperJsonFile + dir
+                    const paperJsonText = JSON.stringify(paperJson);
+                    const paperJsonFile = new File([paperJsonText], 'paper.json', {type:'application/json'});
+                    Object.defineProperty(paperJsonFile, 'webkitRelativePath',
+                        {value:'root/paper-xyz/paper.json'});
+                    const annFile1 = new File([JSON.stringify(ann1)], 'default.json', {type:'application/json'});
+                    Object.defineProperty(annFile1, 'webkitRelativePath',
+                        {value:'root/paper-xyz/page_1/annotations/default.json'});
+                    const annFile2 = new File([JSON.stringify(ann2)], 'default.json', {type:'application/json'});
+                    Object.defineProperty(annFile2, 'webkitRelativePath',
+                        {value:'root/paper-xyz/page_2/annotations/default.json'});
+                    const dir = {
+                        folderName: 'paper-xyz',
+                        files: [paperJsonFile, annFile1, file1, annFile2, file2]
+                    };
+                    const items = await parsePaperDir(paperJsonFile, dir);
+                    return items.map(it => ({
+                        taskId: it.taskId,
+                        paperId: it.paperId,
+                        pageIndex: it.pageIndex,
+                        questionCount: it.paper.questions.length,
+                        judgmentCount: it.paper.judgments.length,
+                        source: it.source,
+                        status: it.annotation.status,
+                        errorCount: it.annotation.errors.length,
+                        imageName: it.imageName
+                    }));
+                }
+            """)
+            assert len(parsed) == 2, f"parsePaperDir 应返回 2 个 item（每页一个），实际: {len(parsed)}"
+            # 同一卷共享 paper 对象
+            assert parsed[0]["paperId"] == 'paper-xyz' and parsed[1]["paperId"] == 'paper-xyz', \
+                f"两 item 应都属于 paper-xyz: {parsed}"
+            assert parsed[0]["pageIndex"] == 0 and parsed[1]["pageIndex"] == 1, \
+                f"page_index 应为 0 和 1: {parsed}"
+            # 共享 paper 数据
+            assert parsed[0]["questionCount"] == 3 and parsed[1]["questionCount"] == 3, \
+                f"两页都应看到整卷 3 道题: {parsed}"
+            assert parsed[0]["judgmentCount"] == 1 and parsed[1]["judgmentCount"] == 1, \
+                f"两页共享 1 条 judgment: {parsed}"
+            # 各自的 errors
+            assert parsed[0]["status"] == 'annotated' and parsed[0]["errorCount"] == 1
+            assert parsed[1]["status"] == 'no_badcase' and parsed[1]["errorCount"] == 0
+            print(f"  ✓ parsePaperDir 正确解析 2 页，共享 questions/judgments，独立 errors")
             passed += 1
 
         except Exception as e:

@@ -1089,7 +1089,7 @@
     <div class="question-bar" id="questionBar">
         <div class="question-bar-status" id="qbStatus">未配置 VLM</div>
         <div class="question-bar-list" id="qbList"></div>
-        <button class="question-bar-refresh" id="qbRefresh" title="重新识别题号" onclick="refreshQuestions()">↻</button>
+        <button class="question-bar-refresh" id="qbRefresh" title="重新识别整卷题号" onclick="refreshPaper()">↻</button>
     </div>
 
     <div class="thumbnail-bar" id="thumbnailBar" style="display:none;">
@@ -1160,11 +1160,10 @@
         let taxonomy = null;
         let storageTimer = null;
 
-        // VLM 题号相关
-        let currentQuestionList = [];   // [{question_no:'1(1)'}, ...] 来自 VLM 缓存或实时调用
-        let currentJudgments = {};      // question_no -> 'correct'|'wrong'|'unmarked'
-        let vlmAbortController = null;  // 切图时 abort 上一次请求
-        let vlmInFlight = false;
+        // VLM 题号相关：以"卷"为粒度
+        // papers[paperId] = { paperId, imageIds, questionList, judgments, vlmInFlight, error, identifiedAt, vlmModelId }
+        let papers = {};
+        let vlmAbortController = null;  // 切卷时 abort 上一次请求
 
         // ============ DOM ============
         const canvas = document.getElementById('drawingCanvas');
@@ -1235,8 +1234,10 @@
         });
 
         // ============ 解析文件夹 ============
+        // 一个子目录 = 一份卷（paper）。卷内多张图共用同一 YAML，paperId = YAML 中第一个 task_id。
         async function parseFolder(files) {
             taskItems = [];
+            papers = {};
             const dirMap = {};
             for (const file of files) {
                 const parts = file.webkitRelativePath.split('/');
@@ -1258,23 +1259,48 @@
                 const taskIds = parseYamlTaskIds(yamlText);
                 if (!taskIds || taskIds.length === 0) continue;
 
-                taskIds.forEach((taskId, taskIdx) => {
-                    imageFiles.forEach((imageFile, imgIdx) => {
-                        const uniqueId = taskIds.length === 1 && imageFiles.length === 1
-                            ? taskId
-                            : `${taskId}__img_${imgIdx}`;
-                        taskItems.push({
-                            id: uniqueId,
-                            taskId,
-                            folderPath: dir.path,
-                            imageFile,
-                            yamlFile,
-                            imageUrl: URL.createObjectURL(imageFile),
-                            imageName: imageFile.name,
-                            metadata: parseYamlMetadata(yamlText)
-                        });
+                const paperId = taskIds[0];
+                if (taskIds.length > 1) {
+                    console.warn(`YAML 多 task_id，仅用第一个作 paperId: ${paperId}（其余忽略: ${taskIds.slice(1).join(', ')}）`);
+                }
+                if (!papers[paperId]) {
+                    papers[paperId] = {
+                        paperId,
+                        imageIds: [],
+                        questionList: [],
+                        judgments: {},
+                        vlmInFlight: false,
+                        error: null,
+                        identifiedAt: null,
+                        vlmModelId: null
+                    };
+                }
+                const paper = papers[paperId];
+                const metadata = parseYamlMetadata(yamlText);
+
+                imageFiles.forEach((imageFile, imgIdx) => {
+                    // 同一卷内多张图按目录顺序确定 page_index
+                    const pageIdx = paper.imageIds.length;
+                    const uniqueId = `${paperId}__img_${pageIdx}`;
+                    taskItems.push({
+                        id: uniqueId,
+                        taskId: paperId,
+                        paperId,
+                        paperImageIndex: pageIdx,
+                        folderPath: dir.path,
+                        imageFile,
+                        yamlFile,
+                        imageUrl: URL.createObjectURL(imageFile),
+                        imageName: imageFile.name,
+                        metadata
                     });
+                    paper.imageIds.push(uniqueId);
                 });
+            }
+
+            // 启动时恢复每卷的 judgments（localStorage 卷级 key）
+            for (const pid in papers) {
+                papers[pid].judgments = loadPaperJudgments(pid);
             }
 
             taskItems.sort((a, b) => {
@@ -1457,6 +1483,8 @@
         }
 
         // ============ 图片加载 ============
+        // 用递增 token 防止快速切图时旧 img.onload 回调污染新图状态
+        let imageLoadToken = 0;
         function loadImage(index) {
             if (index < 0 || index >= taskItems.length) return;
             // 提交当前图（如果有未保存状态）
@@ -1465,6 +1493,7 @@
             currentIndex = index;
             const item = taskItems[index];
             imageLoadTime[item.id] = Date.now();
+            const myToken = ++imageLoadToken;
 
             document.getElementById('taskId').textContent = item.taskId;
             document.getElementById('folderName').textContent = item.folderPath;
@@ -1475,11 +1504,13 @@
 
             img.src = item.imageUrl;
             img.onload = () => {
+                // 旧图的异步 onload 在新图之后才触发：丢弃，避免覆盖 currentIndex 的状态
+                if (myToken !== imageLoadToken) return;
                 applyZoomMode();
                 initCanvas();
                 restoreAnnotation(item.id);
-                // 触发题号识别（缓存优先）
-                loadQuestionsForItem(item).catch(err => console.warn('VLM 加载失败', err));
+                // 题号是卷级，整卷识别一次后所有图共享
+                loadQuestionsForPaper(item.paperId).catch(err => console.warn('VLM 加载失败', err));
             };
 
             updateThumbnail(index);
@@ -1801,7 +1832,6 @@
             annotations[item.id] = serializeAnnotation(item, {
                 status,
                 errors: currentErrors,
-                judgments: judgmentsMapToArray(currentJudgments),
                 startedAt,
                 savedAt: now,
                 durationMs: (existing?.annotation?.total_duration_ms || 0) + duration
@@ -1824,11 +1854,13 @@
             }
         }
 
-        function serializeAnnotation(item, { status, errors, judgments, startedAt, savedAt, durationMs }) {
+        function serializeAnnotation(item, { status, errors, startedAt, savedAt, durationMs }) {
             return {
                 schema_version: SCHEMA_VERSION,
                 image: {
                     task_id: item.taskId,
+                    paper_id: item.paperId || item.taskId,
+                    page_index: item.paperImageIndex ?? 0,
                     source_path: `${item.folderPath}/${item.imageName}`,
                     source_hash: item.sourceHash || null,
                     width: img.naturalWidth || null,
@@ -1838,7 +1870,6 @@
                 annotation: {
                     status,
                     errors: errors.map(e => ({ ...e })),
-                    judgments: Array.isArray(judgments) ? judgments.map(j => ({ ...j })) : [],
                     session_id: sessionId,
                     annotator_id: ANNOTATOR_ID,
                     started_at: startedAt,
@@ -1852,7 +1883,6 @@
         function restoreAnnotation(itemId) {
             const ann = annotations[itemId];
             currentErrors = ann ? ann.annotation.errors.map(e => ({ ...e })) : [];
-            currentJudgments = ann && ann.annotation ? judgmentsArrayToMap(ann.annotation.judgments || []) : {};
             currentErrorType = null;
             currentSubtype = null;
             selectedErrorId = null;
@@ -1891,7 +1921,6 @@
             const data = serializeAnnotation(item, {
                 status,
                 errors: currentErrors,
-                judgments: judgmentsMapToArray(currentJudgments),
                 startedAt: new Date(imageLoadTime[item.id] || Date.now()).toISOString(),
                 savedAt: new Date().toISOString(),
                 durationMs: 0
@@ -2059,21 +2088,40 @@
             return out;
         }
 
-        async function callVLM(imageFile, signal) {
+        async function callVLMPaper(paper, signal) {
             const { baseUrl, modelId, apiKey } = loadVlmSettings();
             if (!modelId || !apiKey) {
                 return { ok: false, reason: 'no_config' };
             }
-            const base64 = await fileToBase64(imageFile);
+            // 按卷内 page_index 顺序收集图
+            const items = paper.imageIds
+                .map(id => taskItems.find(t => t.id === id))
+                .filter(Boolean)
+                .sort((a, b) => a.paperImageIndex - b.paperImageIndex);
+            if (items.length === 0) return { ok: false, reason: 'empty_paper' };
+
+            const userContent = [{
+                type: 'text',
+                text: `这是一套试卷共 ${items.length} 页。请识别所有可见的小题题号，按从上到下、从左到右、跨页连续顺序输出。`
+            }];
+            for (const it of items) {
+                const base64 = await fileToBase64(it.imageFile);
+                userContent.push({
+                    type: 'text',
+                    text: `（第 ${it.paperImageIndex + 1} 页 / 共 ${items.length} 页）`
+                });
+                userContent.push({
+                    type: 'image_url',
+                    image_url: { url: `data:image/jpeg;base64,${base64}` }
+                });
+            }
+
             const endpoint = baseUrl.replace(/\/+$/, '') + '/chat/completions';
             const body = {
                 model: modelId,
                 messages: [
-                    { role: 'system', content: '你是题号识别助手。识别图片中所有可见的小题题号（例如 1、2、1(1)、1(2)、二·3 等）。只输出 JSON 数组，每项为 {"question_no":"<题号字符串>"}。题号顺序按图片从上到下、从左到右。不要输出任何其他文字或解释。' },
-                    { role: 'user', content: [
-                        { type: 'text', text: '请列出这张试卷图上的所有小题题号。' },
-                        { type: 'image_url', image_url: { url: `data:image/jpeg;base64,${base64}` } }
-                    ]}
+                    { role: 'system', content: '你是题号识别助手。识别整套试卷（可能跨多页）中所有可见的小题题号（例如 1、2、1(1)、1(2)、二·3 等）。题号按从上到下、从左到右、跨页连续顺序排列。只输出 JSON 数组，每项为 {"question_no":"<题号字符串>"}。不要输出任何其他文字或解释。' },
+                    { role: 'user', content: userContent }
                 ],
                 temperature: 0
             };
@@ -2101,31 +2149,53 @@
             try { data = await resp.json(); }
             catch (e) { return { ok: false, reason: 'bad_json', message: String(e && e.message || e) }; }
             const content = data && data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content;
-            const items = parseQuestionList(content);
-            return { ok: true, items };
+            const items2 = parseQuestionList(content);
+            return { ok: true, items: items2, modelId };
         }
 
-        // ============ VLM 缓存 ============
-        function vlmCacheKey(sourceHash) {
-            return VLM_CACHE_PREFIX + sourceHash;
+        // ============ VLM 缓存（per-paper） ============
+        function paperCacheKey(paperId) {
+            return VLM_CACHE_PREFIX + paperId;
         }
-        function readVlmCache(sourceHash) {
-            if (!sourceHash) return null;
+        function readPaperCache(paperId) {
             try {
-                const raw = localStorage.getItem(vlmCacheKey(sourceHash));
+                const raw = localStorage.getItem(paperCacheKey(paperId));
                 if (!raw) return null;
                 const v = JSON.parse(raw);
-                if (Array.isArray(v)) return v;
+                if (v && Array.isArray(v.items)) {
+                    return { items: v.items, identifiedAt: v.identifiedAt || null, modelId: v.modelId || null };
+                }
             } catch (_) {}
             return null;
         }
-        function writeVlmCache(sourceHash, items) {
-            if (!sourceHash) return;
+        function writePaperCache(paperId, items, identifiedAt, modelId) {
             try {
-                localStorage.setItem(vlmCacheKey(sourceHash), JSON.stringify(items));
+                localStorage.setItem(paperCacheKey(paperId), JSON.stringify({ items, identifiedAt, modelId }));
             } catch (e) {
-                console.warn('VLM 缓存写入失败', e);
+                console.warn('VLM 卷缓存写入失败', e);
             }
+        }
+        function clearPaperCache(paperId) {
+            try { localStorage.removeItem(paperCacheKey(paperId)); } catch (_) {}
+        }
+
+        // ============ judgments 持久化（per-paper，localStorage） ============
+        function paperJudgmentsKey(paperId) {
+            return 'vlmJudgments:' + paperId;
+        }
+        function loadPaperJudgments(paperId) {
+            try {
+                const raw = localStorage.getItem(paperJudgmentsKey(paperId));
+                if (!raw) return {};
+                return judgmentsArrayToMap(JSON.parse(raw));
+            } catch (_) { return {}; }
+        }
+        function persistPaperJudgments(paperId) {
+            const p = papers[paperId];
+            if (!p) return;
+            try {
+                localStorage.setItem(paperJudgmentsKey(paperId), JSON.stringify(judgmentsMapToArray(p.judgments)));
+            } catch (_) {}
         }
 
         // ============ 题号栏 UI ============
@@ -2136,60 +2206,66 @@
             const status = document.getElementById('qbStatus');
             const list = document.getElementById('qbList');
             const refresh = document.getElementById('qbRefresh');
-            if (!taskItems[currentIndex]) {
+            const item = taskItems[currentIndex];
+            if (!item) {
+                bar.classList.remove('show');
+                return;
+            }
+            const paper = papers[item.paperId];
+            if (!paper) {
                 bar.classList.remove('show');
                 return;
             }
             bar.classList.add('show');
 
+            const questionList = paper.questionList || [];
+            const judgments = paper.judgments || {};
+
             // 状态文本
-            if (vlmInFlight) {
+            if (paper.vlmInFlight) {
                 status.className = 'question-bar-status loading';
                 status.innerHTML = '<span class="question-bar-mini-spinner"></span>识别中...';
             } else if (!hasVlmConfig()) {
                 status.className = 'question-bar-status error';
                 status.textContent = '未配置 VLM，点⚙设置';
-            } else if (currentQuestionList.length === 0) {
+            } else if (paper.error) {
+                status.className = 'question-bar-status error';
+                status.textContent = paper.error + '（点↻重试）';
+            } else if (questionList.length === 0) {
                 status.className = 'question-bar-status';
                 status.textContent = '未识别到题号';
             } else {
-                const correct = Object.values(currentJudgments).filter(s => s === 'correct').length;
-                const wrong = Object.values(currentJudgments).filter(s => s === 'wrong').length;
+                const correct = Object.values(judgments).filter(s => s === 'correct').length;
+                const wrong = Object.values(judgments).filter(s => s === 'wrong').length;
                 status.className = 'question-bar-status';
-                status.textContent = `共 ${currentQuestionList.length} 题 · 对 ${correct} · 错 ${wrong}`;
+                status.textContent = `共 ${questionList.length} 题 · 对 ${correct} · 错 ${wrong}`;
             }
-            refresh.disabled = vlmInFlight || !hasVlmConfig();
+            refresh.disabled = paper.vlmInFlight || !hasVlmConfig();
 
             // 题号按钮
             list.innerHTML = '';
-            for (const { question_no } of currentQuestionList) {
+            for (const { question_no } of questionList) {
                 const btn = document.createElement('button');
                 btn.className = 'qbtn';
-                const st = currentJudgments[question_no] || 'unmarked';
+                const st = judgments[question_no] || 'unmarked';
                 if (st !== 'unmarked') btn.classList.add(st);
                 btn.textContent = question_no;
                 btn.title = `${question_no} — 点击切换 (未判→对→错)`;
-                btn.onclick = () => onQuestionClick(question_no);
+                btn.onclick = () => onQuestionClick(paper.paperId, question_no);
                 list.appendChild(btn);
             }
         }
 
-        function onQuestionClick(questionNo) {
-            const cur = currentJudgments[questionNo] || 'unmarked';
+        function onQuestionClick(paperId, questionNo) {
+            const paper = papers[paperId];
+            if (!paper) return;
+            const cur = paper.judgments[questionNo] || 'unmarked';
             const idx = JUDGMENT_CYCLE.indexOf(cur);
             const next = JUDGMENT_CYCLE[(idx + 1) % JUDGMENT_CYCLE.length];
-            if (next === 'unmarked') delete currentJudgments[questionNo];
-            else currentJudgments[questionNo] = next;
-            // 同步进 annotations[item.id]，保证导出可见
-            const item = taskItems[currentIndex];
-            if (item) {
-                const ann = annotations[item.id];
-                if (ann && ann.annotation) {
-                    ann.annotation.judgments = judgmentsMapToArray(currentJudgments);
-                }
-            }
+            if (next === 'unmarked') delete paper.judgments[questionNo];
+            else paper.judgments[questionNo] = next;
+            persistPaperJudgments(paper.paperId);
             renderQuestionBar();
-            scheduleLocalStorage();
         }
 
         function judgmentsMapToArray(map) {
@@ -2208,122 +2284,131 @@
             return m;
         }
 
-        // ============ 题号加载（缓存优先，否则调 VLM） ============
-        async function loadQuestionsForItem(item, opts = {}) {
-            if (!item) return;
+        // ============ 题号加载（per-paper，缓存优先） ============
+        async function loadQuestionsForPaper(paperId, opts = {}) {
+            const paper = papers[paperId];
+            if (!paper) return;
             const { force = false } = opts;
 
-            // 切图前先 abort 旧请求
+            // 切卷前先 abort 旧请求
             if (vlmAbortController) {
                 try { vlmAbortController.abort(); } catch (_) {}
                 vlmAbortController = null;
             }
 
-            // 不在配置且不强刷：直接渲染占位
+            // 未配置：仅展示当前 paper 已有 judgments（如有），不发请求
             if (!hasVlmConfig()) {
-                vlmInFlight = false;
-                currentQuestionList = [];
-                currentJudgments = judgmentsArrayToMap(annotations[item.id]?.annotation?.judgments || []);
+                paper.vlmInFlight = false;
+                paper.error = null;
                 renderQuestionBar();
                 return;
             }
 
-            // 计算 hash（懒计算）
-            if (!item.sourceHash) {
-                item.sourceHash = await computeSha256(item.imageFile);
-            }
-
             // 缓存优先
             if (!force) {
-                const cached = readVlmCache(item.sourceHash);
-                if (cached) {
-                    currentQuestionList = cached;
-                    currentJudgments = judgmentsArrayToMap(annotations[item.id]?.annotation?.judgments || []);
-                    vlmInFlight = false;
+                const cached = readPaperCache(paperId);
+                if (cached && Array.isArray(cached.items)) {
+                    paper.questionList = cached.items;
+                    paper.identifiedAt = cached.identifiedAt;
+                    paper.vlmModelId = cached.modelId;
+                    paper.vlmInFlight = false;
+                    paper.error = null;
+                    // 缓存的题号列表可能与现存 judgments 不完全重合：清掉已不在新题号列表里的判题
+                    pruneJudgmentsAgainstQuestions(paper);
                     renderQuestionBar();
                     return;
                 }
             }
 
-            // 调 VLM
-            vlmInFlight = true;
-            vlmAbortController = new AbortController();
+            // 调 VLM。capturing controller: 切卷会新建 controller 把 vlmAbortController 替换掉，
+            // 旧 fetch await 返回后比对即可判断自己是否过期，避免污染当前 currentIndex 的 bar。
+            paper.vlmInFlight = true;
+            paper.error = null;
+            const myController = new AbortController();
+            vlmAbortController = myController;
             renderQuestionBar();
             try {
-                const result = await callVLM(item.imageFile, vlmAbortController.signal);
-                if (result.reason === 'aborted') return;  // 已被下一张图中断
+                const result = await callVLMPaper(paper, myController.signal);
+                // 已被切卷/刷新中断：不再写状态、不再渲染
+                if (vlmAbortController !== myController) return;
+                if (result.reason === 'aborted') return;
                 if (!result.ok) {
-                    vlmInFlight = false;
-                    currentQuestionList = [];
+                    paper.vlmInFlight = false;
+                    paper.questionList = [];
                     let msg = '识别失败';
                     if (result.reason === 'http') msg = `VLM HTTP ${result.status}`;
                     else if (result.reason === 'network') msg = '网络错误';
                     else if (result.reason === 'bad_json') msg = 'VLM 返回非 JSON';
-                    const status = document.getElementById('qbStatus');
-                    status.className = 'question-bar-status error';
-                    status.textContent = msg + '（点↻重试）';
-                    document.getElementById('qbList').innerHTML = '';
-                    document.getElementById('qbRefresh').disabled = false;
+                    paper.error = msg;
+                    renderQuestionBar();
                     console.warn('VLM 调用失败', result);
                     return;
                 }
-                currentQuestionList = result.items;
-                writeVlmCache(item.sourceHash, currentQuestionList);
-                // judgments 跟现有 annotations 对齐（清理已不存在的题号）
-                const stored = annotations[item.id]?.annotation?.judgments || [];
-                const storedMap = judgmentsArrayToMap(stored);
-                const newMap = {};
-                for (const { question_no } of currentQuestionList) {
-                    if (storedMap[question_no]) newMap[question_no] = storedMap[question_no];
-                }
-                currentJudgments = newMap;
-                // 把清理后的 judgments 立即同步进 annotations[item.id]，避免后续 restoreAnnotation
-                // 用旧的（已不在新题号列表里的）judgments 覆盖内存
-                if (annotations[item.id] && annotations[item.id].annotation) {
-                    annotations[item.id].annotation.judgments = judgmentsMapToArray(newMap);
-                }
-                vlmInFlight = false;
+                paper.questionList = result.items;
+                paper.identifiedAt = new Date().toISOString();
+                paper.vlmModelId = result.modelId;
+                writePaperCache(paperId, paper.questionList, paper.identifiedAt, paper.vlmModelId);
+                pruneJudgmentsAgainstQuestions(paper);
+                persistPaperJudgments(paperId);
+                paper.vlmInFlight = false;
                 renderQuestionBar();
             } finally {
-                vlmInFlight = false;
-                vlmAbortController = null;
+                // 仅当我仍是当前 controller 时才清掉（避免后到的旧 fetch 清掉新 fetch 的 controller）
+                if (vlmAbortController === myController) {
+                    paper.vlmInFlight = false;
+                    vlmAbortController = null;
+                }
             }
         }
 
-        async function refreshQuestions() {
+        // 把 judgments 中已不在 questionList 里的题号清掉
+        function pruneJudgmentsAgainstQuestions(paper) {
+            if (!paper) return;
+            const valid = new Set((paper.questionList || []).map(q => q.question_no));
+            let changed = false;
+            for (const q of Object.keys(paper.judgments)) {
+                if (!valid.has(q)) {
+                    delete paper.judgments[q];
+                    changed = true;
+                }
+            }
+            if (changed) persistPaperJudgments(paper.paperId);
+        }
+
+        async function refreshPaper() {
             const item = taskItems[currentIndex];
             if (!item) return;
             if (!hasVlmConfig()) {
                 openVlmSettings();
                 return;
             }
+            // 防止双击 ↻ 造成两个并发请求互相 abort
+            const paper = papers[item.paperId];
+            if (paper && paper.vlmInFlight) return;
             // 强制刷新：清缓存再调
-            if (item.sourceHash) {
-                try { localStorage.removeItem(vlmCacheKey(item.sourceHash)); } catch (_) {}
-            }
-            await loadQuestionsForItem(item, { force: true });
+            clearPaperCache(item.paperId);
+            await loadQuestionsForPaper(item.paperId, { force: true });
         }
 
         // ============ 导出 ============
-        // 为某 taskItem 构造导出用的 annotation 对象。
+        // 为某 taskItem 构造导出用的 image-level annotation 对象。
         // 有 errors：用内存里的标注；无 errors：合成 no_badcase 占位对象（不写回 annotations）。
+        // 注：v2 起 judgments 不再写在 image-level annotation 里，改在 paper.json 里。
         function buildExportAnnotation(item, nowIso) {
             const stored = annotations[item.id];
-            // judgments 优先从 stored 取（保证切图后导出仍带历史判题）
-            const judgments = (stored && stored.annotation && stored.annotation.judgments)
-                ? stored.annotation.judgments
-                : (item && item.id === (taskItems[currentIndex] && taskItems[currentIndex].id)
-                    ? judgmentsMapToArray(currentJudgments)
-                    : []);
             if (stored && stored.annotation && stored.annotation.errors && stored.annotation.errors.length > 0) {
-                // 顺手补 judgments 字段，避免旧版本写入的数据缺字段
-                if (!stored.annotation.judgments) stored.annotation.judgments = judgments;
-                return stored;
+                // 防御：清掉旧版本写入的 judgments 字段（已迁卷级）。
+                // 必须 clone，否则会改到内存里的 annotations[item.id]，下一次 persistCurrent 会把
+                // 改动写回 localStorage，悄悄抹掉 v1 数据的 judgments 字段。
+                const cloned = JSON.parse(JSON.stringify(stored));
+                if (cloned.annotation && 'judgments' in cloned.annotation) {
+                    delete cloned.annotation.judgments;
+                }
+                return cloned;
             }
             const synthesized = serializeAnnotation(item, {
                 status: 'no_badcase',
                 errors: [],
-                judgments,
                 startedAt: (stored && stored.annotation && stored.annotation.started_at) || nowIso,
                 savedAt: (stored && stored.annotation && stored.annotation.saved_at) || nowIso,
                 durationMs: (stored && stored.annotation && stored.annotation.total_duration_ms) || 0
@@ -2366,6 +2451,8 @@
                 const errorTypeCount = {};
                 let annotatedCount = 0;
                 let noBadcaseCount = 0;
+                // 卷级聚合：paperId -> { questions, judgments, identified_at, images: [] }
+                const papersExported = {};
 
                 for (const item of taskItems) {
                     const ann = buildExportAnnotation(item, nowIso);
@@ -2374,23 +2461,33 @@
 
                     // 确保 source_hash 写入（buildExportAnnotation 复用内存对象时也要补）
                     ann.image.source_hash = item.sourceHash;
+                    // 防御：image 段补 paper_id + page_index（serializeAnnotation 已加，但历史 annotations 可能没有）
+                    if (!ann.image.paper_id) ann.image.paper_id = item.paperId || item.taskId;
+                    if (typeof ann.image.page_index !== 'number') ann.image.page_index = item.paperImageIndex ?? 0;
 
+                    // v2+：ZIP 顶层目录以 paper_id（卷 id）命名；卷内 page_N/ 子目录存图级数据
+                    const paperFolderName = item.paperId || item.taskId;
                     const taskId = item.taskId;
-                    const folder = zip.folder(taskId);
-                    const annFolder = folder.folder('annotations');
+                    const pageIdx1 = (item.paperImageIndex ?? 0) + 1;  // 1-indexed
+                    const pageName = `page_${pageIdx1}`;
+                    const taskFolder = zip.folder(paperFolderName);
+                    const pageFolder = taskFolder.folder(pageName);
+                    const annFolder = pageFolder.folder('annotations');
 
                     annFolder.file(`${ANNOTATOR_ID}.json`, JSON.stringify(ann, null, 2));
 
                     // source.<ext>
                     const ext = item.imageName.split('.').pop();
                     const imgData = await item.imageFile.arrayBuffer();
-                    folder.file(`source.${ext}`, imgData);
+                    pageFolder.file(`source.${ext}`, imgData);
 
                     // 派生 stats.jsonl 行 + error_type_count（仅 annotated 项产生）
                     ann.annotation.errors.forEach(err => {
                         const mark = err.marks.find(m => m.role === 'primary') || err.marks[0];
                         statsRows.push({
                             task_id: taskId,
+                            paper_id: ann.image.paper_id,
+                            page_index: ann.image.page_index,
                             image: item.imageName,
                             error_id: err.error_id,
                             error_type: err.error_type,
@@ -2407,11 +2504,51 @@
 
                     sessionImages.push({
                         task_id: taskId,
+                        paper_id: ann.image.paper_id,
+                        page_index: ann.image.page_index,
                         source_path: ann.image.source_path,
                         status,
                         error_count: ann.annotation.errors.length,
-                        annotation_file: `${taskId}/annotations/${ANNOTATOR_ID}.json`
+                        annotation_file: `${paperFolderName}/${pageName}/annotations/${ANNOTATOR_ID}.json`
                     });
+
+                    // 卷级聚合
+                    if (!papersExported[item.paperId]) {
+                        const paper = papers[item.paperId];
+                        papersExported[item.paperId] = {
+                            paper_id: item.paperId,
+                            questions: paper ? paper.questionList : [],
+                            judgments: paper ? judgmentsMapToArray(paper.judgments) : [],
+                            identified_at: paper ? paper.identifiedAt : null,
+                            vlm_model_id: paper ? paper.vlmModelId : null,
+                            images: []
+                        };
+                    }
+                    papersExported[item.paperId].images.push({
+                        page_index: item.paperImageIndex ?? 0,
+                        task_id: item.taskId,
+                        source_path: ann.image.source_path,
+                        source_hash: item.sourceHash,
+                        status,
+                        error_count: ann.annotation.errors.length,
+                        annotation_file: `${paperFolderName}/${pageName}/annotations/${ANNOTATOR_ID}.json`
+                    });
+                }
+
+                // 写每卷的 paper.json
+                for (const pid in papersExported) {
+                    const pe = papersExported[pid];
+                    const paperJson = {
+                        schema_version: SCHEMA_VERSION,
+                        paper_id: pe.paper_id,
+                        image_count: pe.images.length,
+                        questions: pe.questions,
+                        judgments: pe.judgments,
+                        identified_at: pe.identified_at,
+                        vlm_model_id: pe.vlm_model_id,
+                        images: pe.images
+                    };
+                    zip.folder(pid).file('paper.json', JSON.stringify(paperJson, null, 2));
                 }
 
                 const sessionJson = {
@@ -2430,6 +2567,10 @@
                         pending: 0
                     },
                     error_type_count: errorTypeCount,
+                    papers: Object.keys(papersExported).map(pid => ({
+                        paper_id: pid,
+                        image_count: papersExported[pid].images.length
+                    })),
                     images: sessionImages
                 };
                 zip.file('_session.json', JSON.stringify(sessionJson, null, 2));
@@ -2446,7 +2587,7 @@
                 saveAs(content, `批阅标注结果_${ts}.zip`);
 
                 hideLoading();
-                showToast(`✓ 已导出 ${taskItems.length} 个结果（${annotatedCount} 有 badcase / ${noBadcaseCount} 无 badcase）`);
+                showToast(`✓ 已导出 ${taskItems.length} 张图（${Object.keys(papersExported).length} 卷 · ${annotatedCount} 有 badcase / ${noBadcaseCount} 无 badcase）`);
             } catch (err) {
                 console.error(err);
                 hideLoading();
