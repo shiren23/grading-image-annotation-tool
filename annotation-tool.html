@@ -819,25 +819,33 @@
             display: none;
             align-items: center;
             gap: 10px;
-            padding: 0 14px;
-            height: 56px;
+            padding: 8px 14px;
+            min-height: 56px;
             background: #fafafa;
             border-top: 1px solid #e0e0e0;
-            overflow-x: auto;
-            overflow-y: hidden;
+            overflow: hidden;
         }
         .question-bar.show { display: flex; }
 
         .question-bar-status {
-            flex-shrink: 0;
+            flex: 0 1 240px;
             font-size: 12px;
             color: #888;
-            max-width: 200px;
+            line-height: 1.4;
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
-        .question-bar-status.error { color: #d4380d; }
+        .question-bar-status.error {
+            flex: 1 1 auto;
+            max-width: calc(100% - 50px);
+            max-height: 96px;
+            color: #d4380d;
+            white-space: normal;
+            word-break: break-word;
+            overflow: auto;
+            text-overflow: clip;
+        }
         .question-bar-status.loading { color: #1890ff; }
 
         .question-bar-list {
