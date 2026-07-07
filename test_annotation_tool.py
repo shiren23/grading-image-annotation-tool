@@ -593,8 +593,8 @@ async def run_tests():
             print("  ✓ 设置面板：开/存/读完整，齿轮 has-config 标记正确")
             passed += 1
 
-            # 测试 18: 题号按钮三态循环点击（per-paper）
-            print("\n[测试 18] 题号按钮三态循环（per-paper）...")
+            # 测试 18: 题号按钮两态循环点击（per-paper，默认 correct）
+            print("\n[测试 18] 题号按钮两态循环（默认 correct，对↔错）...")
             # Stub callVLMPaper，避免真实网络调用
             await page.evaluate("""
                 () => {
@@ -620,39 +620,53 @@ async def run_tests():
             btns = page.locator(".qbtn")
             await expect(btns).to_have_count(3)
 
-            # 点击第 1 个：unmarked → correct
+            # 出现时默认就是 correct
+            cls0 = await btns.nth(0).get_attribute("class")
+            assert "correct" in cls0 and "wrong" not in cls0, \
+                f"按钮初始应为 correct，class={cls0}"
+            # 状态文本：共 3 题 · 对 3 · 错 0
+            status_text = await page.locator("#qbStatus").inner_text()
+            assert "共 3 题" in status_text and "对 3" in status_text and "错 0" in status_text, \
+                f"状态文本应显示默认全对，实际: {status_text}"
+
+            # 点击第 1 个：correct → wrong
             await btns.nth(0).click()
             cls = await btns.nth(0).get_attribute("class")
-            assert "correct" in cls, f"第 1 次点击应切到 correct，class={cls}"
-            # 再点：correct → wrong
+            assert "wrong" in cls and "correct" not in cls, \
+                f"第 1 次点击应切到 wrong，class={cls}"
+            # 状态文本：共 3 题 · 对 2 · 错 1
+            status_text = await page.locator("#qbStatus").inner_text()
+            assert "对 2" in status_text and "错 1" in status_text, \
+                f"切一题到 wrong 后状态文本应更新，实际: {status_text}"
+
+            # 再点：wrong → correct（两态循环，无 unmarked）
             await btns.nth(0).click()
             cls = await btns.nth(0).get_attribute("class")
-            assert "wrong" in cls, f"第 2 次点击应切到 wrong，class={cls}"
-            # 再点：wrong → unmarked（class 移除）
-            await btns.nth(0).click()
-            cls = await btns.nth(0).get_attribute("class")
-            assert cls == "qbtn", f"第 3 次点击应回到 unmarked，class={cls}"
-            # judgments 应从 paper.judgments 移除
+            assert "correct" in cls and "wrong" not in cls, \
+                f"第 2 次点击应切回 correct，class={cls}"
+
+            # paper.judgments 应始终显式记录（不删除）
             paper_id = await page.evaluate("() => taskItems[currentIndex].paperId")
             judgments_in_paper = await page.evaluate("""(pid) =>
                 Object.entries(papers[pid].judgments).map(([q,s]) => ({question_no:q, status:s}))
             """, paper_id)
-            assert judgments_in_paper == [], f"unmarked 后 paper.judgments 应清空，实际: {judgments_in_paper}"
+            assert any(j["question_no"]=="1(1)" and j["status"]=="correct" for j in judgments_in_paper), \
+                f"切回 correct 后 paper.judgments 应显式记录，实际: {judgments_in_paper}"
 
-            # 点第 2 个按钮到 correct，验证保留
+            # 点第 2 个按钮到 wrong，验证保留
             await btns.nth(1).click()
             judgments_in_paper = await page.evaluate("""(pid) =>
                 Object.entries(papers[pid].judgments).map(([q,s]) => ({question_no:q, status:s}))
             """, paper_id)
-            assert any(j["question_no"]=="1(2)" and j["status"]=="correct" for j in judgments_in_paper), \
-                f"第 2 个按钮的 correct 应同步到 paper.judgments，实际: {judgments_in_paper}"
+            assert any(j["question_no"]=="1(2)" and j["status"]=="wrong" for j in judgments_in_paper), \
+                f"第 2 个按钮的 wrong 应同步到 paper.judgments，实际: {judgments_in_paper}"
             # judgments 应已持久化到 localStorage vlmJudgments:<paper_id>
             ls_judgments = await page.evaluate("""(pid) =>
                 JSON.parse(localStorage.getItem('vlmJudgments:' + pid) || '[]')
             """, paper_id)
-            assert any(j["question_no"]=="1(2)" and j["status"]=="correct" for j in ls_judgments), \
+            assert any(j["question_no"]=="1(2)" and j["status"]=="wrong" for j in ls_judgments), \
                 f"judgments 应持久化到 vlmJudgments:<paper_id>，实际: {ls_judgments}"
-            print("  ✓ 三态循环 unmarked→correct→wrong→unmarked + paper.judgments 同步 + localStorage 持久化")
+            print("  ✓ 两态循环 默认correct→wrong→correct + paper.judgments 显式记录 + localStorage 持久化")
             passed += 1
 
             # 测试 18b: VLM 错误展示应包含底层错误码/正文
@@ -770,23 +784,28 @@ async def run_tests():
             await page.wait_for_function("() => document.getElementById('previewImage').naturalWidth > 0", timeout=3000)
             # 等 VLM stub 返回
             await page.wait_for_function("document.querySelectorAll('.qbtn').length === 4", timeout=3000)
-            # 在 page 0 上点第 1 个按钮到 correct
+            # 按钮出现时默认就是 correct
             btns = page.locator(".qbtn")
+            cls_init = await btns.nth(0).get_attribute("class")
+            assert "correct" in cls_init and "wrong" not in cls_init, \
+                f"page 0 初始应为 correct，class={cls_init}"
+            # 在 page 0 上点第 1 个：correct → wrong
             await btns.nth(0).click()
             cls0 = await btns.nth(0).get_attribute("class")
-            assert "correct" in cls0, f"page 0 点击应切 correct，class={cls0}"
-            # 切到 page 1（同卷），应看到同一组题号 + 第 1 个按钮仍是 correct
+            assert "wrong" in cls0 and "correct" not in cls0, \
+                f"page 0 点击应切到 wrong，class={cls0}"
+            # 切到 page 1（同卷），应看到同一组题号 + 第 1 个按钮仍是 wrong（共享 judgments）
             await page.evaluate("() => loadImage(1)")
             await page.wait_for_function("() => document.querySelectorAll('.qbtn').length === 4", timeout=3000)
             btns2 = page.locator(".qbtn")
             cls1 = await btns2.nth(0).get_attribute("class")
-            assert "correct" in cls1, f"page 1（同卷）应共享 paper.judgments，第 1 个按钮应仍为 correct，class={cls1}"
-            # 切回 page 0，仍 correct
+            assert "wrong" in cls1, f"page 1（同卷）应共享 paper.judgments，第 1 个按钮应仍为 wrong，class={cls1}"
+            # 切回 page 0，仍 wrong
             await page.evaluate("() => loadImage(0)")
             await page.wait_for_function("() => document.querySelectorAll('.qbtn').length === 4", timeout=3000)
             btns3 = page.locator(".qbtn")
             cls0b = await btns3.nth(0).get_attribute("class")
-            assert "correct" in cls0b, f"切回 page 0 应保留 correct，class={cls0b}"
+            assert "wrong" in cls0b, f"切回 page 0 应保留 wrong，class={cls0b}"
             # 多图卷：callVLMPaper 应只被调用 1 次（卷级，不是图级）
             call_count = await page.evaluate("""() => {
                 const paper = papers[Object.keys(papers)[0]];

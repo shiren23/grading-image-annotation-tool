@@ -2252,7 +2252,9 @@
         }
 
         // ============ 题号栏 UI ============
-        const JUDGMENT_CYCLE = ['unmarked', 'correct', 'wrong'];
+        // 默认 correct，点击在 对/错 之间切换（不再有 unmarked 状态）
+        const JUDGMENT_CYCLE = ['correct', 'wrong'];
+        const DEFAULT_JUDGMENT = 'correct';
 
         function renderQuestionBar() {
             const bar = document.getElementById('questionBar');
@@ -2292,23 +2294,26 @@
                 status.textContent = '未识别到题号';
                 status.title = '';
             } else {
-                const correct = Object.values(judgments).filter(s => s === 'correct').length;
-                const wrong = Object.values(judgments).filter(s => s === 'wrong').length;
+                // 默认 correct：未显式标记 wrong 的题号都视为正确
+                let wrong = 0;
+                for (const { question_no } of questionList) {
+                    if (judgments[question_no] === 'wrong') wrong++;
+                }
+                const correct = questionList.length - wrong;
                 status.className = 'question-bar-status';
                 status.textContent = `共 ${questionList.length} 题 · 对 ${correct} · 错 ${wrong}`;
                 status.title = '';
             }
             refresh.disabled = paper.vlmInFlight || !hasVlmConfig();
 
-            // 题号按钮
+            // 题号按钮：默认 correct，永远显式加状态类
             list.innerHTML = '';
             for (const { question_no } of questionList) {
                 const btn = document.createElement('button');
-                btn.className = 'qbtn';
-                const st = judgments[question_no] || 'unmarked';
-                if (st !== 'unmarked') btn.classList.add(st);
+                const st = judgments[question_no] || DEFAULT_JUDGMENT;
+                btn.className = `qbtn ${st}`;
                 btn.textContent = question_no;
-                btn.title = `${question_no} — 点击切换 (未判→对→错)`;
+                btn.title = `${question_no} — 点击切换 对/错`;
                 btn.onclick = () => onQuestionClick(paper.paperId, question_no);
                 list.appendChild(btn);
             }
@@ -2317,11 +2322,10 @@
         function onQuestionClick(paperId, questionNo) {
             const paper = papers[paperId];
             if (!paper) return;
-            const cur = paper.judgments[questionNo] || 'unmarked';
+            const cur = paper.judgments[questionNo] || DEFAULT_JUDGMENT;
             const idx = JUDGMENT_CYCLE.indexOf(cur);
             const next = JUDGMENT_CYCLE[(idx + 1) % JUDGMENT_CYCLE.length];
-            if (next === 'unmarked') delete paper.judgments[questionNo];
-            else paper.judgments[questionNo] = next;
+            paper.judgments[questionNo] = next;
             persistPaperJudgments(paper.paperId);
             renderQuestionBar();
         }
