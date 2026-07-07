@@ -1286,6 +1286,32 @@
                 const paper = papers[paperId];
                 const metadata = parseYamlMetadata(yamlText);
 
+                // 文本驱动题号：与 metadata.yaml 同级的 questions.txt
+                // VLM 未配置时的 fallback；VLM 配置后此 paper.questionList 会被 VLM 缓存/调用覆盖
+                const questionsFile = dir.files.find(f => f.name === 'questions.txt');
+                if (questionsFile && paper.questionList.length === 0) {
+                    try {
+                        const qtext = await readFileAsText(questionsFile);
+                        const parsed = parseQuestionsText(qtext);
+                        if (parsed.ok && parsed.questions.length > 0) {
+                            paper.questionList = parsed.questions;
+                            paper.vlmModelId = 'questions.txt';
+                            paper.identifiedAt = new Date(questionsFile.lastModified || Date.now()).toISOString();
+                            paper.textJudgments = parsed.judgments;
+                            // 清掉该 paper 的旧 VLM 缓存，避免用户后续重新启用 VLM 时
+                            // 旧的 VLM 结果覆盖本次 text 编辑
+                            clearPaperCache(paperId);
+                            if (parsed.errors.length > 0) {
+                                console.warn(`[questions.txt] ${dir.path} 解析警告：`, parsed.errors);
+                            }
+                        } else if (parsed.errors.length > 0) {
+                            console.warn(`[questions.txt] ${dir.path} 解析错误：`, parsed.errors);
+                        }
+                    } catch (e) {
+                        console.warn(`[questions.txt] ${dir.path} 读取失败：`, e);
+                    }
+                }
+
                 imageFiles.forEach((imageFile, imgIdx) => {
                     // 同一卷内多张图按目录顺序确定 page_index
                     const pageIdx = paper.imageIds.length;
@@ -1306,9 +1332,13 @@
                 });
             }
 
-            // 启动时恢复每卷的 judgments（localStorage 卷级 key）
+            // 启动时恢复每卷的 judgments：
+            // questions.txt 提供初值（textJudgments），localStorage 是用户后续操作（覆盖初值）
             for (const pid in papers) {
-                papers[pid].judgments = loadPaperJudgments(pid);
+                const textJ = papers[pid].textJudgments || {};
+                const lsJ = loadPaperJudgments(pid);
+                papers[pid].judgments = { ...textJ, ...lsJ };
+                delete papers[pid].textJudgments;
             }
 
             taskItems.sort((a, b) => {
@@ -1359,6 +1389,73 @@
                 }
             }
             return meta;
+        }
+
+        // ============ 文本驱动题号识别（VLM 未配置时的 fallback） ============
+        // 文件名约定：与学生文件夹下 metadata.yaml 同级的 questions.txt
+        // 行格式：题型 | 题号 | 小题号 | 正误
+        //   - 列分隔符：|
+        //   - 注释：行首 #（允许前导空白）
+        //   - 空行跳过
+        //   - 必填：题型、题号
+        //   - 可选：小题号（如 (1)，与题号拼接成 question_no）
+        //   - 可选：正误（对/正确/✓/correct | 错/错误/✗/wrong | 未判/-/空，空默认 correct）
+        // 详见 docs/questions-txt.md
+        function parseQuestionsText(text) {
+            const questions = [];
+            const judgments = {};
+            const errors = [];
+            const seen = new Set();
+            const CORRECT_TOKENS = new Set(['对', '正确', '✓', 'correct']);
+            const WRONG_TOKENS = new Set(['错', '错误', '✗', 'wrong']);
+            const UNMARKED_TOKENS = new Set(['未判', '未判断', '-', 'unmarked']);
+            // strip UTF-8 BOM（Windows Notepad 默认带）+ 统一 CRLF/CR/LF
+            const normalized = (text || '').replace(/^\uFEFF/, '');
+            const lines = normalized.split(/\r\n|\r|\n/);
+
+            lines.forEach((rawLine, idx) => {
+                const lineNo = idx + 1;
+                const trimmed = rawLine.trim();
+                if (trimmed === '' || trimmed.startsWith('#')) return;
+
+                const parts = rawLine.split('|').map(p => p.trim());
+                if (parts.length < 2) {
+                    errors.push(`第 ${lineNo} 行：列数不足（至少 "题型 | 题号"，用 | 分隔）`);
+                    return;
+                }
+                const type = parts[0];
+                const no = parts[1] || '';
+                const sub = parts[2] || '';
+                const statusRaw = parts[3] || '';
+                if (!type || !no) {
+                    errors.push(`第 ${lineNo} 行：题型或题号为空`);
+                    return;
+                }
+                const questionNo = sub ? `${no}${sub}` : `${no}`;
+                if (seen.has(questionNo)) {
+                    errors.push(`第 ${lineNo} 行：题号 ${questionNo} 重复（后覆盖前）`);
+                }
+                seen.add(questionNo);
+                // 同一题号覆盖前面的：从 questions 里移除旧条目
+                const existIdx = questions.findIndex(q => q.question_no === questionNo);
+                if (existIdx >= 0) questions.splice(existIdx, 1);
+                questions.push({ question_no: questionNo, type, sub: sub || null });
+
+                if (statusRaw) {
+                    const token = statusRaw.toLowerCase();
+                    if (CORRECT_TOKENS.has(statusRaw) || CORRECT_TOKENS.has(token)) {
+                        judgments[questionNo] = 'correct';
+                    } else if (WRONG_TOKENS.has(statusRaw) || WRONG_TOKENS.has(token)) {
+                        judgments[questionNo] = 'wrong';
+                    } else if (UNMARKED_TOKENS.has(statusRaw) || UNMARKED_TOKENS.has(token)) {
+                        // 不写入 judgments（默认 correct）
+                    } else {
+                        errors.push(`第 ${lineNo} 行：未识别的正误值 "${statusRaw}"（应为 对/错/未判）`);
+                    }
+                }
+            });
+
+            return { ok: true, questions, judgments, errors };
         }
 
         // ============ UI 初始化 ============
@@ -2034,6 +2131,8 @@
             updateVlmSettingsBtnState();
             closeVlmSettings();
             showToast('✓ VLM 设置已保存');
+            // 同步刷新题号栏：↻ 按钮的 disabled 状态依赖 hasVlmConfig()
+            try { renderQuestionBar(); } catch (_) {}
             // 用户点 ↻ 才主动重识别，避免自动触发带来的网络/计费意外
         }
 
@@ -2309,44 +2408,49 @@
             const questionList = paper.questionList || [];
             const judgments = paper.judgments || {};
 
-            // 状态文本
+            // 状态文本（分支顺序：识别中 → 已有题号 → VLM 错误 → VLM 待识别 → 无 VLM 无文本）
             if (paper.vlmInFlight) {
                 status.className = 'question-bar-status loading';
                 status.innerHTML = '<span class="question-bar-mini-spinner"></span>识别中...';
                 status.title = '';
-            } else if (!hasVlmConfig()) {
-                status.className = 'question-bar-status error';
-                status.textContent = '未配置 VLM，点⚙设置';
-                status.title = '';
-            } else if (paper.error) {
-                status.className = 'question-bar-status error';
-                status.textContent = paper.error + '（点↻重试）';
-                status.title = paper.error;
-            } else if (questionList.length === 0) {
-                status.className = 'question-bar-status';
-                status.textContent = '未识别到题号';
-                status.title = '';
-            } else {
-                // 默认 correct：未显式标记 wrong 的题号都视为正确
+            } else if (questionList.length > 0) {
+                // 文本路径或 VLM 缓存路径：已有题号，正常显示
                 let wrong = 0;
                 for (const { question_no } of questionList) {
                     if (judgments[question_no] === 'wrong') wrong++;
                 }
                 const correct = questionList.length - wrong;
+                const usingText = paper.vlmModelId === 'questions.txt';
                 status.className = 'question-bar-status';
-                status.textContent = `共 ${questionList.length} 题 · 对 ${correct} · 错 ${wrong}`;
+                status.textContent = `共 ${questionList.length} 题 · 对 ${correct} · 错 ${wrong}${usingText ? ' · 文本' : ''}`;
+                status.title = usingText ? '题号来自 questions.txt' : '';
+            } else if (paper.error) {
+                status.className = 'question-bar-status error';
+                status.textContent = paper.error + '（点↻重试）';
+                status.title = paper.error;
+            } else if (hasVlmConfig()) {
+                status.className = 'question-bar-status';
+                status.textContent = '未识别到题号';
                 status.title = '';
+            } else {
+                // VLM 未配置 + 无 questions.txt：不报错，隐藏底栏
+                bar.classList.remove('show');
+                list.innerHTML = '';
+                return;
             }
             refresh.disabled = paper.vlmInFlight || !hasVlmConfig();
 
             // 题号按钮：默认 correct，永远显式加状态类
             list.innerHTML = '';
-            for (const { question_no } of questionList) {
+            for (const q of questionList) {
+                const question_no = q.question_no;
                 const btn = document.createElement('button');
                 const st = judgments[question_no] || DEFAULT_JUDGMENT;
                 btn.className = `qbtn ${st}`;
                 btn.textContent = question_no;
-                btn.title = `${question_no} — 点击切换 对/错`;
+                btn.title = q.type
+                    ? `${q.type} · ${question_no} — 点击切换 对/错`
+                    : `${question_no} — 点击切换 对/错`;
                 btn.onclick = () => onQuestionClick(paper.paperId, question_no);
                 list.appendChild(btn);
             }
@@ -2432,6 +2536,10 @@
 
             // 调 VLM。capturing controller: 切卷会新建 controller 把 vlmAbortController 替换掉，
             // 旧 fetch await 返回后比对即可判断自己是否过期，避免污染当前 currentIndex 的 bar。
+            // 先清空 questionList + vlmModelId，避免 in-flight 期间残留旧数据（如 text 模式的题号）
+            paper.questionList = [];
+            paper.vlmModelId = null;
+            paper.identifiedAt = null;
             paper.vlmInFlight = true;
             paper.error = null;
             const myController = new AbortController();

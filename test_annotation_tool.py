@@ -965,6 +965,195 @@ async def run_tests():
             print(f"  ✓ parseQuestionList 7 个降级 case 全过")
             passed += 1
 
+            # 测试 21: parseQuestionsText 文本驱动接口单元测试
+            print("\n[测试 21] parseQuestionsText 解析（文本驱动题号接口）...")
+            txt_cases = await page.evaluate("""
+                () => {
+                    const run = (text) => {
+                        const r = parseQuestionsText(text);
+                        return {
+                            questions: r.questions.map(q => `${q.question_no}|${q.type}|${q.sub||''}`),
+                            wrongs: Object.entries(r.judgments).filter(([k,v]) => v === 'wrong').map(([k]) => k),
+                            corrects: Object.entries(r.judgments).filter(([k,v]) => v === 'correct').map(([k]) => k),
+                            errors: r.errors
+                        };
+                    };
+                    return {
+                        normal: run(`# header
+                            选择题 | 1 | | 对
+                            填空题 | 2 | (1) | 错
+                            填空题 | 2 | (2) | 对
+                            解答题 | 3 | (1) | 未判
+                            解答题 | 3 | (2) |
+                        `),
+                        english_tokens: run(`选择 | 1 | | correct\\n选择 | 2 | | wrong\\n选择 | 3 | | unmarked`),
+                        symbol_tokens: run(`填空 | 1 | | ✓\\n填空 | 2 | | ✗`),
+                        no_status_column: run(`填空 | 1 | (1)\\n填空 | 1 | (2)`),
+                        empty: run(``),
+                        only_comments: run(`# just a comment\\n   # another`),
+                        too_few_cols: run(`only-one-column\\n填空 | 1 | (1) | 对`),
+                        dup_question: run(`填空 | 1 | (1) | 对\\n填空 | 1 | (1) | 错`),
+                        bad_status: run(`填空 | 1 | (1) | 莫名其妙的值`),
+                        sub_with_full_width_paren: run(`解答 | 1 | （1） | 对`)
+                    };
+                }
+            """)
+            # 正常 case
+            n = txt_cases["normal"]
+            assert n["questions"] == ["1|选择题|", "2(1)|填空题|(1)", "2(2)|填空题|(2)", "3(1)|解答题|(1)", "3(2)|解答题|(2)"], \
+                f"正常解析题号错误: {n['questions']}"
+            assert n["wrongs"] == ["2(1)"], f"错题判题错误: {n['wrongs']}"
+            assert sorted(n["corrects"]) == ["1", "2(2)"], f"对题判题错误: {n['corrects']}"
+            assert n["errors"] == [], f"正常 case 不应有 errors: {n['errors']}"
+            # 英文 token
+            e = txt_cases["english_tokens"]
+            assert e["corrects"] == ["1"], f"correct token 解析错误: {e['corrects']}"
+            assert e["wrongs"] == ["2"], f"wrong token 解析错误: {e['wrongs']}"
+            assert "3" not in e["corrects"] and "3" not in e["wrongs"], \
+                f"unmarked 不应进 judgments: {e}"
+            # 符号 token
+            s = txt_cases["symbol_tokens"]
+            assert s["corrects"] == ["1"] and s["wrongs"] == ["2"], f"符号 token 解析错误: {s}"
+            # 缺正误列：所有题不写 judgments
+            ns = txt_cases["no_status_column"]
+            assert ns["questions"] == ["1(1)|填空|(1)", "1(2)|填空|(2)"], \
+                f"缺正误列解析错误: {ns['questions']}"
+            assert ns["wrongs"] == [] and ns["corrects"] == [], \
+                f"缺正误列不应有 judgments: {ns}"
+            # 空文件
+            assert txt_cases["empty"]["questions"] == [] and txt_cases["empty"]["errors"] == [], \
+                f"空文件应返回空结果: {txt_cases['empty']}"
+            # 仅注释
+            assert txt_cases["only_comments"]["questions"] == [], \
+                f"仅注释应返回空: {txt_cases['only_comments']}"
+            # 列数不足
+            assert "only-one-column" not in txt_cases["too_few_cols"]["questions"], \
+                f"单列行应被跳过: {txt_cases['too_few_cols']}"
+            assert len(txt_cases["too_few_cols"]["errors"]) >= 1, \
+                f"单列行应报错: {txt_cases['too_few_cols']}"
+            # 重复题号：后者覆盖前者
+            d = txt_cases["dup_question"]
+            assert d["questions"] == ["1(1)|填空|(1)"], \
+                f"重复题号应去重: {d['questions']}"
+            assert d["corrects"] == [], f"覆盖后旧 correct 应清除: {d['corrects']}"
+            assert d["wrongs"] == ["1(1)"], f"覆盖后新 wrong 应生效: {d['wrongs']}"
+            # 未识别正误：题号仍加入，正误忽略
+            b = txt_cases["bad_status"]
+            assert b["questions"] == ["1(1)|填空|(1)"], \
+                f"未识别正误仍应加题号: {b['questions']}"
+            assert b["corrects"] == [] and b["wrongs"] == [], \
+                f"未识别正误不应入 judgments: {b}"
+            assert len(b["errors"]) >= 1, f"应有错误记录: {b['errors']}"
+            # 全角括号小题号
+            fp = txt_cases["sub_with_full_width_paren"]
+            assert fp["questions"] == ["1（1）|解答|（1）"], \
+                f"全角括号应原样拼接: {fp['questions']}"
+            print("  ✓ parseQuestionsText 10 个 case 全过（含容错）")
+            passed += 1
+
+            # 测试 22: VLM 未配置时走 questions.txt 路径（不报错）
+            print("\n[测试 22] VLM 未配置 + questions.txt → 文本路径，不报错...")
+            # 先确保 VLM 未配置
+            await page.evaluate("""
+                () => {
+                    localStorage.removeItem('vlm:baseUrl');
+                    localStorage.removeItem('vlm:modelId');
+                    localStorage.removeItem('vlm:apiKey');
+                }
+            """)
+            has_vlm = await page.evaluate("() => hasVlmConfig()")
+            assert has_vlm is False, f"清空后 VLM 应未配置，实际 hasVlmConfig()={has_vlm}"
+
+            # 构造一个有 questions.txt 的卷：注入 papers + taskItems + questionList
+            await page.evaluate("""
+                async () => {
+                    const PID = 'text-mode-paper-uuid-xyz';
+                    const c = document.createElement('canvas');
+                    c.width = 800; c.height = 600;
+                    const cx = c.getContext('2d');
+                    cx.fillStyle = '#fff'; cx.fillRect(0, 0, 800, 600);
+                    const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.9));
+                    const file = new File([blob], 'p1.jpg', { type: 'image/jpeg' });
+                    taskItems = [{
+                        id: `${PID}__img_0`, taskId: PID, paperId: PID, paperImageIndex: 0,
+                        folderPath: '未匹配/textmode', imageName: 'p1.jpg',
+                        imageUrl: URL.createObjectURL(file), imageFile: file,
+                        metadata: { task_ids: [PID] }
+                    }];
+                    papers = {};
+                    papers[PID] = {
+                        paperId: PID, imageIds: [`${PID}__img_0`],
+                        // 模拟 parseFolder 从 questions.txt 加载的结果
+                        questionList: [
+                            { question_no: '1', type: '选择题', sub: null },
+                            { question_no: '2(1)', type: '填空题', sub: '(1)' },
+                            { question_no: '2(2)', type: '填空题', sub: '(2)' }
+                        ],
+                        judgments: { '1': 'correct', '2(1)': 'wrong', '2(2)': 'correct' },
+                        vlmInFlight: false, error: null,
+                        identifiedAt: '2026-07-07T00:00:00.000Z',
+                        vlmModelId: 'questions.txt'
+                    };
+                    initThumbnails();
+                    loadImage(0);
+                }
+            """)
+            await page.wait_for_function("() => document.getElementById('previewImage').naturalWidth > 0", timeout=3000)
+            await page.wait_for_function("() => document.querySelectorAll('.qbtn').length === 3", timeout=3000)
+            # 底栏应显示，不报错
+            bar = page.locator("#questionBar")
+            assert await bar.evaluate("el => el.classList.contains('show')"), \
+                "VLM 未配置但有 questions.txt 时底栏应显示"
+            status_text = await page.locator("#qbStatus").inner_text()
+            assert "未配置" not in status_text and "VLM" not in status_text, \
+                f"文本模式底栏不应报 '未配置 VLM'，实际: {status_text}"
+            assert "共 3 题" in status_text and "对 2" in status_text and "错 1" in status_text, \
+                f"文本模式统计错误: {status_text}"
+            assert "文本" in status_text, f"应有 '· 文本' 标识: {status_text}"
+            # 第 2 题（2(1)）应是 wrong 类
+            btns = page.locator(".qbtn")
+            cls1 = await btns.nth(1).get_attribute("class")
+            assert "wrong" in cls1, f"2(1) 应为 wrong，class={cls1}"
+            # 第 1 题应带题型 title
+            title0 = await btns.nth(0).get_attribute("title")
+            assert "选择题" in title0, f"题型应在 title 中: {title0}"
+            # ↻ 按钮应禁用（VLM 未配置）
+            refresh_disabled = await page.locator("#qbRefresh").is_disabled()
+            assert refresh_disabled, "VLM 未配置时 ↻ 应禁用"
+            # 点击题号切换仍工作
+            await btns.nth(0).click()
+            cls0_after = await btns.nth(0).get_attribute("class")
+            assert "wrong" in cls0_after, f"点击应切到 wrong，class={cls0_after}"
+            print("  ✓ 文本模式：底栏显示题号/统计/文本标识，无 VLM 报错，点击切换正常，↻ 禁用")
+            passed += 1
+
+            # 测试 23: VLM 未配置且无 questions.txt → 隐藏底栏（不报错）
+            print("\n[测试 23] VLM 未配置 + 无 questions.txt → 隐藏底栏...")
+            await page.evaluate("""
+                () => {
+                    const PID = 'empty-paper-uuid';
+                    papers[PID] = {
+                        paperId: PID, imageIds: [`${PID}__img_0`],
+                        questionList: [], judgments: {},
+                        vlmInFlight: false, error: null,
+                        identifiedAt: null, vlmModelId: null
+                    };
+                    taskItems.push({
+                        id: `${PID}__img_0`, taskId: PID, paperId: PID, paperImageIndex: 0,
+                        folderPath: '未匹配/empty', imageName: 'p.jpg',
+                        imageUrl: taskItems[0].imageUrl, imageFile: taskItems[0].imageFile,
+                        metadata: { task_ids: [PID] }
+                    });
+                    loadImage(taskItems.length - 1);
+                }
+            """)
+            await page.wait_for_function("() => document.querySelectorAll('.qbtn').length === 0", timeout=3000)
+            bar_show = await page.locator("#questionBar").evaluate("el => el.classList.contains('show')")
+            assert bar_show is False, \
+                f"VLM 未配置 + 无 questions.txt 应隐藏底栏，class.show={bar_show}"
+            print("  ✓ 无 VLM 无 questions.txt：底栏隐藏，不报错")
+            passed += 1
+
         except Exception as e:
             print(f"  ✗ 测试失败: {e}")
             failed += 1
