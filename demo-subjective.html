@@ -563,6 +563,15 @@ function getChipsData(q, type) {
   return chips;
 }
 
+// 统计专用:返回 [{ subIdx, backend }] 列表,与卡片渲染的 chip 数对齐
+// 选择题 → 整题 1 项;解答题/填空题/综合题 → 按 chips(有 parts 就细分,无则整题 1 项)
+function computeChipsForStats(q) {
+  if (q.question_type === '选择题') return [{ subIdx: null, backend: q.is_right }];
+  const chips = getChipsData(q, q.question_type);
+  if (chips.length === 0) return [{ subIdx: null, backend: q.is_right }];
+  return chips.map(c => ({ subIdx: c.idx, backend: c.backend }));
+}
+
 // 解析题干,把空位按所属子题分组
 // 空位格式兼容:LaTeX \underline{\quad...}、ASCII ____、全角 ＿＿＿＿
 // 无空位但有合法子题标记(数学解答题)时,按子题数返回虚拟 blanks
@@ -1339,40 +1348,15 @@ function renderGroup(type, label, qs) {
   const div = document.createElement('div');
   div.className = 'group';
 
-  // 统计(解答题按空级,其他按现有粒度)
+  // 统计:统一走 computeChipsForStats(与卡片渲染对齐,综合题不再硬编码整题)
   let okN = 0, badN = 0, naN = 0, totalSub = 0;
   for (const q of qs) {
-    if (type === '选择题' || type === '综合题') {
-      totalSub += 1;
-      if (q.is_right === true) okN++;
-      else if (q.is_right === false) badN++;
+    const units = computeChipsForStats(q);
+    totalSub += units.length;
+    for (const u of units) {
+      if (u.backend === true) okN++;
+      else if (u.backend === false) badN++;
       else naN++;
-    } else if (type === '解答题') {
-      const parts = q.is_right_parts || [];
-      const blanks = parseBlanksBySubquestion(q);
-      if (blanks.length === 0) {
-        totalSub += 1;
-        if (q.is_right === true) okN++;
-        else if (q.is_right === false) badN++;
-        else naN++;
-      } else {
-        totalSub += blanks.length;
-        for (const b of blanks) {
-          const p = parts[b.subQ - 1];
-          if (p === true) okN++;
-          else if (p === false) badN++;
-          else naN++;
-        }
-      }
-    } else {
-      const parts = q.is_right_parts || [];
-      if (parts.length === 0) { totalSub += 1; q.is_right === true ? okN++ : q.is_right === false ? badN++ : naN++; continue; }
-      totalSub += parts.length;
-      for (const p of parts) {
-        if (p === true) okN++;
-        else if (p === false) badN++;
-        else naN++;
-      }
     }
   }
 
@@ -1673,28 +1657,18 @@ function drawBox(parent, bboxPoints, cls) {
 function renderStats() {
   let okN = 0, badN = 0, userBadN = 0, reasonN = 0, total = 0;
   for (const q of state.paper.result) {
-    const t = q.question_type;
-    let chipsCount;
-    if (t === '选择题' || t === '综合题') {
-      chipsCount = 1;
-    } else {
-      const chips = getChipsData(q, t);
-      chipsCount = chips.length;
-    }
-    total += chipsCount;
-
-    for (let i = 0; i < chipsCount; i++) {
-      const subIdx = (t === '选择题' || t === '综合题') ? null : i;
-      const uMark = getUserMark(q.question_id, subIdx);
-      const reason = getErrorReason(q.question_id, subIdx);
+    const units = computeChipsForStats(q);
+    total += units.length;
+    for (const u of units) {
+      const uMark = getUserMark(q.question_id, u.subIdx);
+      const reason = getErrorReason(q.question_id, u.subIdx);
       if (reason && reason.category) reasonN++;
       if (uMark === 'bad') {
         userBadN++;
         continue;
       }
-      const b = backendStatus(q, subIdx);
-      if (b === true) okN++;
-      else if (b === false) badN++;
+      if (u.backend === true) okN++;
+      else if (u.backend === false) badN++;
     }
   }
   document.getElementById('stats').textContent =
