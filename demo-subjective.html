@@ -526,21 +526,23 @@ function backendStatus(q, subIdx) {
 function getChipsData(q, type) {
   const regions = sortedRegions(q);
   const parts = q.is_right_parts || [];
-  let blanks = null;
-  if (type === '解答题') blanks = parseBlanksBySubquestion(q);
+  const blanks = type === '解答题' ? parseBlanksBySubquestion(q) : null;
+  const hasBlanks = blanks && blanks.length > 0;
 
-  const N = blanks
+  const N = hasBlanks
     ? Math.max(blanks.length, regions.length)
     : Math.max(parts.length, regions.length);
 
   const chips = [];
   for (let i = 0; i < N; i++) {
     let label, backend, subQ = null;
-    if (blanks) {
+    if (hasBlanks) {
       if (i < blanks.length) {
         const b = blanks[i];
         subQ = b.subQ;
-        label = `(${b.subQ}).${b.blankInSubQ}`;
+        // 单空子题(含数学解答题虚拟 blanks)只显示 (subQ),
+        // 多空子题才加 .N 后缀避免歧义
+        label = b.blankInSubQ > 1 ? `(${b.subQ}).${b.blankInSubQ}` : `(${b.subQ})`;
       } else {
         const last = blanks[blanks.length - 1];
         subQ = last ? last.subQ : 1;
@@ -563,14 +565,31 @@ function getChipsData(q, type) {
 
 // 解析题干,把空位按所属子题分组
 // 空位格式兼容:LaTeX \underline{\quad...}、ASCII ____、全角 ＿＿＿＿
+// 无空位但有合法子题标记(数学解答题)时,按子题数返回虚拟 blanks
 // 返回 [{ globalIdx, subQ, blankInSubQ }],subQ=0 表示无子题(整题)
 function parseBlanksBySubquestion(q) {
   const text = q.question || '';
   const blankMatches = [...text.matchAll(/\\underline\{[^}]*\}|_{2,}|＿{2,}/g)];
-  if (blankMatches.length === 0) return [];
-  // 子题标记:(1) (2) ... 排除 [1] 这种方括号
-  const subQMatches = [...text.matchAll(/\((\d+)\)/g)];
+  // 严格子题标记:(N) 单数字紧跟 ),后不跟"分"(分值)/"·"(年份地点)
+  // 这样自动排除 (13 分)、(2026·宜春模拟)、(1, -2) 等
+  const subQMatches = [...text.matchAll(/\((\d)\)(?!\s*分|·)/g)];
 
+  // 无空位标记:数学解答题等,按子题标记构造虚拟 blanks
+  if (blankMatches.length === 0) {
+    if (subQMatches.length === 0) return [];
+    const seen = new Set();
+    const ordered = [];
+    for (const m of subQMatches) {
+      const n = parseInt(m[1]);
+      if (n >= 1 && !seen.has(n)) {
+        seen.add(n);
+        ordered.push(n);
+      }
+    }
+    return ordered.map((subQ, i) => ({ globalIdx: i, subQ, blankInSubQ: 1 }));
+  }
+
+  // 有空位标记:按空位归属子题
   const result = [];
   for (let i = 0; i < blankMatches.length; i++) {
     const pos = blankMatches[i].index;
