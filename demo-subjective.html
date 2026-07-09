@@ -138,9 +138,10 @@
   .copy-btn.copied { background: #34c759; color: #fff; border-color: #34c759; }
 
   /* 元信息 */
-  .meta-grid { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; font-size: 13px; }
-  .meta-grid .k { color: #8e8e93; }
-  .meta-grid .v { color: #1d1d1f; }
+  .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; font-size: 13px; }
+  .meta-pair { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+  .meta-grid .k { color: #8e8e93; flex-shrink: 0; }
+  .meta-grid .v { color: #1d1d1f; min-width: 0; }
   .meta-grid .v.bad { color: #d70015; }
   .meta-grid .v.ok { color: #1d8a3f; }
   .meta-grid .v.user-bad { color: #d70015; font-weight: 600; }
@@ -1745,12 +1746,12 @@ function renderDetail(sel) {
   html += `<div class="detail-section">
     <h3>元信息</h3>
     <div class="meta-grid">
-      <span class="k">题号</span><span class="v">第 ${escape(q.question_id || '?')} 题</span>
-      <span class="k">题型</span><span class="v">${escape(q.question_type || '?')}</span>
-      <span class="k">所在图</span><span class="v">图 ${imgIdx + 1}</span>
-      ${subIdx !== null ? `<span class="k">单元</span><span class="v">${subIdx + 1} / ${unitCount}${curChip ? ` · ${curChip.label}` : ''}</span>` : ''}
-      <span class="k">后端判定</span><span class="v ${bClass}">${bText}</span>
-      ${isMarked ? `<span class="k">用户标记</span><span class="v user-bad">✗ 手标错</span>` : ''}
+      <div class="meta-pair"><span class="k">题号</span><span class="v">第 ${escape(q.question_id || '?')} 题</span></div>
+      <div class="meta-pair"><span class="k">题型</span><span class="v">${escape(q.question_type || '?')}</span></div>
+      <div class="meta-pair"><span class="k">所在图</span><span class="v">图 ${imgIdx + 1}</span></div>
+      ${subIdx !== null ? `<div class="meta-pair"><span class="k">单元</span><span class="v">${subIdx + 1} / ${unitCount}${curChip ? ` · ${curChip.label}` : ''}</span></div>` : ''}
+      <div class="meta-pair"><span class="k">后端判定</span><span class="v ${bClass}">${bText}</span></div>
+      ${isMarked ? `<div class="meta-pair"><span class="k">用户标记</span><span class="v user-bad">✗ 手标错</span></div>` : ''}
     </div>
     <div style="margin-top:10px; display: flex; gap: 6px">
       <button class="mark-btn ${isMarked ? 'marked' : ''}" id="mark-btn">${isMarked ? '✗ 取消手标' : '标记为错'}</button>
