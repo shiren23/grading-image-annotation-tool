@@ -3,6 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <title>主观题标注 Demo(折中1:按题型差异化)</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; font-family: -apple-system, "PingFang SC", sans-serif; background: #f5f5f7; color: #1d1d1f; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
@@ -389,6 +392,22 @@ async function loadReferencePaper() {
   return findReferencePaper()?.taskData || null;
 }
 
+// KaTeX 公式渲染:扫描元素内文本节点的 $...$ / $$...$$ / \(...\) / \[...\] 并渲染
+// CDN 加载失败时 window.renderMathInElement 不存在,降级到纯文本显示
+function typesetMath(el) {
+  if (!el || !window.renderMathInElement) return;
+  renderMathInElement(el, {
+    delimiters: [
+      {left: '$$', right: '$$', display: true},
+      {left: '\\[', right: '\\]', display: true},
+      {left: '\\(', right: '\\)', display: false},
+      {left: '$', right: '$', display: false}
+    ],
+    throwOnError: false,
+    ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+  });
+}
+
 function showModal(title, bodyHtml) {
   let mask = document.querySelector('.modal-mask');
   if (mask) mask.remove();
@@ -401,6 +420,7 @@ function showModal(title, bodyHtml) {
     </div>`;
   mask.addEventListener('click', e => { if (e.target === mask || e.target.classList.contains('modal-close')) mask.remove(); });
   document.body.appendChild(mask);
+  typesetMath(mask.querySelector('.modal-body'));
 }
 
 async function showReferenceCompare(qid) {
@@ -2032,6 +2052,7 @@ function renderDetail(sel) {
 
   pane.innerHTML = html;
   bindDetailEvents(sel);
+  typesetMath(pane);
 }
 
 function bindDetailEvents(sel) {
