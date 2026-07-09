@@ -376,11 +376,11 @@
 
 <script>
 // 数据源由用户导入(文件夹选择),不再硬编码路径
-// state.papers 由 importFolder 填充,每项:{ folder, task_id, taskData, imageFiles: [File...] }
-// state.referencePaper 由 importFolder 检测参考卷目录填充
+// PAPERS 由 importFolder 填充,每项:{ folder, task_id, taskData, imageFiles: [File...] }
+// 参考卷 = PAPERS 中 folder 含"参考卷"的那一项(由 findReferencePaper 现场找)
 
 function findReferencePaper() {
-  return state.papers.find(p => p.folder.includes('参考卷')) || null;
+  return PAPERS.find(p => p.folder.includes('参考卷')) || null;
 }
 
 async function loadReferencePaper() {
