@@ -346,7 +346,7 @@
   <span class="shortcut-group"><kbd>←</kbd><kbd>→</kbd><span class="label">切图</span></span>
   <span class="shortcut-group"><kbd>,</kbd><span class="label">下一张图 / 下一学生</span></span>
   <span class="shortcut-group"><kbd>Enter</kbd><span class="label">切换对错</span></span>
-  <span class="shortcut-group"><kbd>1</kbd>–<kbd>4</kbd><span class="label">错误原因(选中错空,先大类再子类)</span></span>
+  <span class="shortcut-group"><kbd>1</kbd>–<kbd>4</kbd><span class="label">错误原因(选中空后,先大类再子类,自动标记为错)</span></span>
   <span class="shortcut-group"><kbd>0</kbd><span class="label">适应宽度</span></span>
   <span class="shortcut-group"><kbd>+</kbd><kbd>−</kbd><span class="label">缩放</span></span>
   <span class="shortcut-group"><kbd>Esc</kbd><span class="label">取消选中</span></span>
@@ -1107,18 +1107,15 @@ function setupKeyboard() {
       applyZoom();
       redrawOverlay();
     } else if (e.key === '1' || e.key === '2' || e.key === '3' || e.key === '4') {
-      // 选中错的空时:数字键选错误原因(先大类,再子类);否则 1 = 重置缩放
+      // 选中空时:数字键选错误原因(先大类,再子类);否则 1 = 重置缩放
       const sel = state.selection;
-      const isMarkedWrong = sel && (
-        getUserMark(sel.question.question_id, sel.subIdx) === 'bad' ||
-        backendStatus(sel.question, sel.subIdx) === false
-      );
-      if (isMarkedWrong) {
+      if (sel) {
         e.preventDefault();
         const idx = parseInt(e.key) - 1;
         const qid = sel.question.question_id;
         const subIdx = sel.subIdx;
         const reason = getErrorReason(qid, subIdx) || {};
+        let changed = false;
         if (reason.category) {
           // 已选大类 → 数字键选该大类下第 idx 个子类
           const cat = REASON_CATEGORIES.find(c => c.id === reason.category);
@@ -1128,12 +1125,10 @@ function setupKeyboard() {
               subtype: cat.subtypes[idx].id,
               comment: reason.comment || ''
             });
-            renderBar();
-            renderDetail(sel);
-            redrawOverlay();
+            changed = true;
           }
         } else {
-          // 未选大类 → 数字键选第 idx 个大类
+          // 未选大类 → 数字键选第 idx 个大类,并自动标记为错
           if (idx < REASON_CATEGORIES.length) {
             const cat = REASON_CATEGORIES[idx];
             setErrorReason(qid, subIdx, {
@@ -1141,10 +1136,18 @@ function setupKeyboard() {
               subtype: null,
               comment: ''
             });
-            renderBar();
-            renderDetail(sel);
-            redrawOverlay();
+            // 选错误原因即视为"认为此空错",自动打 userMark
+            if (!state.userMarks[markKey(qid, subIdx)]) {
+              state.userMarks[markKey(qid, subIdx)] = 'bad';
+            }
+            changed = true;
           }
+        }
+        if (changed) {
+          renderBar();
+          renderDetail(sel);
+          redrawOverlay();
+          renderStats();
         }
       } else if (e.key === '1') {
         state.zoom = 1;
