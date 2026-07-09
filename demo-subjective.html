@@ -1610,88 +1610,27 @@ function scrollSelectionIntoView() {
   }
 }
 
-// ============ Bar 渲染(核心:按题型差异化) ============
+// ============ Bar 渲染(按题号顺序,不按题型分组) ============
 function renderBar() {
   const pane = document.getElementById('bar-pane');
   pane.innerHTML = '';
-  const groups = groupByType();
 
-  const typeLabels = {
-    '选择题': '选择题(每题一个判定单元)',
-    '解答题': '解答题(子题级判定,is_right_parts)',
-    '填空题': '填空题(空级判定,is_right_parts)',
-    '综合题': '综合题(按 is_right_parts 尽量细分,无 parts 时才整题)',
-  };
+  const qs = [...(state.paper.result || [])].sort((a, b) => {
+    const ai = parseInt(a.question_id), bi = parseInt(b.question_id);
+    if (isNaN(ai) || isNaN(bi)) return String(a.question_id).localeCompare(String(b.question_id));
+    return ai - bi;
+  });
 
-  const order = ['选择题', '解答题', '填空题', '综合题'];
-  for (const type of order) {
-    const qs = groups[type] || [];
-    if (qs.length === 0) continue;
-    pane.appendChild(renderGroup(type, typeLabels[type] || type, qs));
-  }
-}
-
-function groupByType() {
-  const g = {};
-  for (const q of state.paper.result) {
-    const t = q.question_type || '其他';
-    if (!g[t]) g[t] = [];
-    g[t].push(q);
-  }
-  // 按 qid 数字排序
-  for (const k in g) {
-    g[k].sort((a, b) => {
-      const ai = parseInt(a.question_id), bi = parseInt(b.question_id);
-      if (isNaN(ai) || isNaN(bi)) return String(a.question_id).localeCompare(String(b.question_id));
-      return ai - bi;
-    });
-  }
-  return g;
-}
-
-function renderGroup(type, label, qs) {
-  const div = document.createElement('div');
-  div.className = 'group';
-
-  // 统计:统一走 computeChipsForStats(与卡片渲染对齐,综合题不再硬编码整题)
-  let okN = 0, badN = 0, naN = 0, totalSub = 0;
+  const wrap = document.createElement('div');
+  wrap.className = 'chips';
   for (const q of qs) {
-    const units = computeChipsForStats(q);
-    totalSub += units.length;
-    for (const u of units) {
-      if (u.backend === true) okN++;
-      else if (u.backend === false) badN++;
-      else naN++;
-    }
-  }
-
-  const header = document.createElement('div');
-  header.className = 'group-header';
-  header.innerHTML = `
-    <span>${label} <span class="count">(${qs.length} 题 / ${totalSub} 单元)</span></span>
-    <span class="summary">
-      <span class="ok">✓${okN}</span>
-      <span class="bad">✗${badN}</span>
-      <span class="na">—${naN}</span>
-    </span>
-  `;
-  div.appendChild(header);
-
-  const chipsWrap = document.createElement('div');
-  chipsWrap.className = 'chips';
-
-  for (const q of qs) {
-    if (type === '选择题') {
-      chipsWrap.appendChild(renderChoiceChip(q));
+    if (q.question_type === '选择题') {
+      wrap.appendChild(renderChoiceChip(q));
     } else {
-      // 解答题 / 填空题 / 综合题:大卡片,按 is_right_parts 尽量细分
-      // 综合题若粒度不稳(parts 数 ≠ 空数),仍按 parts 出 chip,不降级整题
-      chipsWrap.appendChild(renderSubjectiveCard(q, type));
+      wrap.appendChild(renderSubjectiveCard(q, q.question_type));
     }
   }
-
-  div.appendChild(chipsWrap);
-  return div;
+  pane.appendChild(wrap);
 }
 
 function statusClass(v) {
