@@ -1287,7 +1287,7 @@ function renderBar() {
     '选择题': '选择题(每题一个判定单元)',
     '解答题': '解答题(子题级判定,is_right_parts)',
     '填空题': '填空题(空级判定,is_right_parts)',
-    '综合题': '综合题(粒度不稳定,降级为整题)',
+    '综合题': '综合题(按 is_right_parts 尽量细分,无 parts 时才整题)',
   };
 
   const order = ['选择题', '解答题', '填空题', '综合题'];
@@ -1375,10 +1375,9 @@ function renderGroup(type, label, qs) {
   for (const q of qs) {
     if (type === '选择题') {
       chipsWrap.appendChild(renderChoiceChip(q));
-    } else if (type === '综合题') {
-      chipsWrap.appendChild(renderSynthesisCard(q));
     } else {
-      // 解答题 / 填空题:大卡片,内含子题/空级 chip
+      // 解答题 / 填空题 / 综合题:大卡片,按 is_right_parts 尽量细分
+      // 综合题若粒度不稳(parts 数 ≠ 空数),仍按 parts 出 chip,不降级整题
       chipsWrap.appendChild(renderSubjectiveCard(q, type));
     }
   }
@@ -1422,23 +1421,22 @@ function renderSubjectiveCard(q, type) {
   card.className = 'big-card';
   card.style.flexBasis = '100%';
 
-  const parts = q.is_right_parts || [];
   const chipsData = getChipsData(q, type);
   const unitCount = chipsData.length;
-  const unitLabel = '空';
 
   // 整题汇总
-  const allRight = chipsData.length > 0 && chipsData.every(c => c.backend === true);
-  const allFalse = chipsData.length > 0 && chipsData.every(c => c.backend === false);
+  const allRight = unitCount > 0 && chipsData.every(c => c.backend === true);
+  const allFalse = unitCount > 0 && chipsData.every(c => c.backend === false);
   const indicator = allRight ? '✓ 全对' : allFalse ? '✗ 全错' : unitCount > 0 ? '— 部分' : (q.is_right === true ? '✓' : q.is_right === false ? '✗' : '—');
   const indClass = allRight ? 'ok' : allFalse ? 'bad' : 'na';
+  const countLabel = unitCount > 0 ? `${unitCount} 个空` : '整题级(无空级数据)';
 
   const header = document.createElement('div');
   header.className = 'big-card-header';
   header.innerHTML = `
     <span class="qid">第 ${q.question_id || '?'} 题</span>
     <span class="qtype">${type}</span>
-    <span style="font-size:12px;color:#6e6e73">${unitCount} 个${unitLabel}</span>
+    <span style="font-size:12px;color:#6e6e73">${countLabel}</span>
     <span class="indicator ${indClass}">${indicator}</span>
   `;
   card.appendChild(header);
@@ -1448,48 +1446,33 @@ function renderSubjectiveCard(q, type) {
   const innerChips = document.createElement('div');
   innerChips.className = 'chips';
 
-  chipsData.forEach(({ idx, label, backend }) => {
+  const renderChip = ({ idx, label, backend, title }) => {
     const chip = document.createElement('div');
     const status = combinedStatus(q, idx);
     chip.className = 'chip ' + status;
     const sym = status === 'user-bad' ? '✗' : backend === true ? '✓' : backend === false ? '✗' : '—';
     const sub = status === 'user-bad' ? '手标' : '';
     chip.innerHTML = `<div>${label}</div><div class="sub">${sym}${sub ? ' ' + sub : ''}</div>`;
-    chip.title = `第 ${label} 单元(再次点击切换标记)`;
+    chip.title = title;
     chip.addEventListener('click', () => {
       if (isActive(q.question_id, idx)) toggleMarkAndRefresh(q, idx);
       else selectQuestion(q, idx);
     });
     if (isActive(q.question_id, idx)) chip.classList.add('active');
     innerChips.appendChild(chip);
-  });
+  };
+
+  if (unitCount === 0) {
+    // 数据本身无空级(parts 与 regions 均空):整题级 chip,这是数据限制而非"降级"
+    renderChip({ idx: null, label: '整题', backend: q.is_right, title: '整题判定(再次点击切换标记)' });
+  } else {
+    chipsData.forEach(({ idx, label, backend }) => {
+      renderChip({ idx, label, backend, title: `第 ${label} 单元(再次点击切换标记)` });
+    });
+  }
   body.appendChild(innerChips);
   card.appendChild(body);
 
-  return card;
-}
-
-function renderSynthesisCard(q) {
-  // 综合题:整题一个 chip,粒度不可靠
-  const card = document.createElement('div');
-  card.className = 'big-card';
-  card.style.flexBasis = '100%';
-
-  const header = document.createElement('div');
-  header.className = 'big-card-header';
-  header.innerHTML = `
-    <span class="qid">第 ${q.question_id || '?'} 题</span>
-    <span class="qtype">综合题</span>
-    <span style="font-size:12px;color:#8e8e93">整题判定(数据不稳定)</span>
-    <span class="indicator ${statusClass(q.is_right)}">${q.is_right === true ? '✓' : q.is_right === false ? '✗' : '—'}</span>
-  `;
-  header.addEventListener('click', () => {
-    if (isActive(q.question_id, null)) toggleMarkAndRefresh(q, null);
-    else selectQuestion(q, null);
-  });
-  if (isActive(q.question_id, null)) header.style.background = '#e8f2ff';
-
-  card.appendChild(header);
   return card;
 }
 
