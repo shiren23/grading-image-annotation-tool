@@ -10,8 +10,11 @@
 |------|------|------|
 | **主观题批改工具** | 在卷面上标记错题、挂错误原因、导出结果 | [demo-subjective.html](https://shiren23.github.io/grading-image-annotation-tool/demo-subjective.html) |
 | **主观题批改结果查看器** | 只读浏览批改结果 + AI 对话分析 | [result-viewer-v2.html](https://shiren23.github.io/grading-image-annotation-tool/result-viewer-v2.html) |
+| **整卷正确率统计工具** | 由欣懿制作 | [grading-tool.html](https://octavia-11.github.io/grading--tool/question-counter.html) |
+| 已弃用工具 |  | |
 | **图片批阅标注工具** | 用矩形框框选错误位置，导出 ZIP | [annotation-tool.html](https://shiren23.github.io/grading-image-annotation-tool/annotation-tool.html) |
 | **标注结果查看工具** | 浏览 bbox 标注结果，支持编辑 | [result-viewer.html](https://shiren23.github.io/grading-image-annotation-tool/result-viewer.html) |
+
 
 > 推荐 Chrome / Edge / Safari，不需要后端服务。
 
