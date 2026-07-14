@@ -1247,56 +1247,136 @@ function setupAIChat() {
 
 function buildAIContext() {
   if (PAPERS.length === 0) return '暂无卷子数据';
-  let summary = `以下是 ${PAPERS.length} 份卷子的批改汇总统计:\n\n`;
 
-  // 按题号统计
-  const qStats = {};
-  for (const paper of PAPERS) {
+  // 检测学科
+  let subject = '未知';
+  for (const p of PAPERS) {
+    if (p.taskData && p.taskData.subject) { subject = p.taskData.subject; break; }
+  }
+
+  let out = `学科: ${subject}\n`;
+  out += `卷子总数: ${PAPERS.length}\n`;
+  out += `说明: 以下按每份卷子逐题列出错题详情。"后端判定"=AI批改系统的判定, "人工标记"=人工复核结果。仅列出有错误的题目。\n\n`;
+
+  for (let i = 0; i < PAPERS.length; i++) {
+    const paper = PAPERS[i];
     if (!paper.taskData || !paper.taskData.result) continue;
+
+    const isRef = paper.folder.includes('参考卷');
+    const label = isRef ? '参考卷' : `卷${i + 1}`;
     const marks = paper.userMarks || {};
     const reasons = paper.errorReasons || {};
-    for (const q of paper.taskData.result) {
+    const questions = [...paper.taskData.result].sort((a, b) => {
+      const na = parseInt(a.question_id), nb = parseInt(b.question_id);
+      if (!isNaN(na) && !isNaN(nb)) return na - nb;
+      return String(a.question_id).localeCompare(String(b.question_id));
+    });
+
+    // 收集错题
+    const errorQs = [];
+    for (const q of questions) {
       const qid = String(q.question_id || '?');
-      if (!qStats[qid]) qStats[qid] = { total: 0, userErrors: 0, backendErrors: 0, reasons: {} };
-      qStats[qid].total++;
       const chips = computeChipsForStats(q);
-      let hasUserError = false;
       let hasBackendError = false;
+      let hasUserError = false;
+      // 检查整题级标记
+      if (marks[markKey(qid, null)] === 'bad') hasUserError = true;
+      // 检查逐空
       for (const chip of chips) {
-        const key = markKey(qid, chip.subIdx);
-        if (marks[key] === 'bad') {
-          hasUserError = true;
-          const reason = reasons[key];
-          if (reason && reason.category) {
-            const rKey = reasonLabel(reason.category, reason.subtype);
-            qStats[qid].reasons[rKey] = (qStats[qid].reasons[rKey] || 0) + 1;
-          }
-        }
+        if (marks[markKey(qid, chip.subIdx)] === 'bad') hasUserError = true;
         if (chip.backend === false) hasBackendError = true;
       }
-      if (hasUserError) qStats[qid].userErrors++;
-      if (hasBackendError) qStats[qid].backendErrors++;
+      // 后端整题判定
+      if (chips.length === 0 && q.is_right === false) hasBackendError = true;
+      if (hasBackendError || hasUserError) errorQs.push({ q, hasBackendError, hasUserError });
     }
+
+    out += `========== ${label} (共${questions.length}题, 错${errorQs.length}题) ==========\n`;
+
+    if (errorQs.length === 0) {
+      out += `  (全对, 无错题)\n\n`;
+      continue;
+    }
+
+    for (const { q, hasBackendError, hasUserError } of errorQs) {
+      const qid = String(q.question_id || '?');
+      const qt = q.question_type || '?';
+      const qStem = (q.question || '').replace(/\s+/g, ' ').trim();
+      const stemShort = qStem.length > 300 ? qStem.slice(0, 300) + '...' : qStem;
+
+      out += `【第${qid}题 · ${qt}】\n`;
+      out += `  题干: ${stemShort}\n`;
+
+      // 后端判定
+      const parts = q.is_right_parts || [];
+      if (parts.length > 1) {
+        const partStr = parts.map((p, idx) => `第${idx+1}问${p === true ? '✓' : p === false ? '✗' : '—'}`).join(' ');
+        out += `  后端判定: ${partStr}\n`;
+      } else {
+        out += `  后端判定: ${q.is_right === true ? '✓对' : q.is_right === false ? '✗错' : '—未判'}\n`;
+      }
+
+      // 人工标记 + 原因
+      if (hasUserError) {
+        out += `  人工标记: ✗错\n`;
+        // 收集本题所有错误原因(逐空 + 整题)
+        const reasonEntries = [];
+        const qidPrefix = qid + '-';
+        for (const [k, r] of Object.entries(reasons)) {
+          if (k === markKey(qid, null) || (k.startsWith(qidPrefix) && r && r.category)) {
+            const label2 = reasonLabel(r.category, r.subtype);
+            const comment = r.comment ? `"${r.comment}"` : '';
+            reasonEntries.push(`${k}: ${label2}${comment}`);
+          }
+        }
+        if (reasonEntries.length > 0) {
+          out += `  人工错误原因: ${reasonEntries.join(' | ')}\n`;
+        }
+      }
+
+      // 学生作答
+      const usrAns = (q.user_final_answer || '').trim();
+      if (usrAns) out += `  学生作答: ${usrAns.slice(0, 400)}\n`;
+
+      // 参考答案
+      const refAns = (q.final_right_answer || '').trim();
+      if (refAns) out += `  参考答案: ${refAns.slice(0, 400)}\n`;
+
+      // 后端纠错
+      const correction = (q.correction || '').trim();
+      if (correction) out += `  后端纠错: ${correction.slice(0, 600)}\n`;
+
+      // 解题分析
+      const analysis = (q.analysis || '').trim();
+      if (analysis) out += `  解题分析: ${analysis.slice(0, 400)}\n`;
+
+      // 步骤分析
+      const stepAnalysis = (q.step_analysis || '').trim();
+      if (stepAnalysis) out += `  步骤分析: ${stepAnalysis.slice(0, 400)}\n`;
+
+      // 错误步骤/类型
+      const errorStep = (q.error_step || '').trim();
+      const errorType = (q.error_type || '').trim();
+      if (errorStep || errorType) {
+        out += `  错误步骤: ${[errorStep, errorType].filter(Boolean).join(' / ')}\n`;
+      }
+
+      // 知识点
+      const knowledge = (q.knowledge || '').trim();
+      if (knowledge) out += `  知识点: ${knowledge.slice(0, 300)}\n`;
+
+      // debug_info (处理阶段)
+      const debugInfo = q.debug_info;
+      if (Array.isArray(debugInfo) && debugInfo.length > 0) {
+        out += `  处理阶段: ${debugInfo.join(' → ')}\n`;
+      }
+
+      out += `\n`;
+    }
+    out += `\n`;
   }
 
-  const sortedQids = Object.keys(qStats).sort((a, b) => {
-    const na = parseInt(a), nb = parseInt(b);
-    if (!isNaN(na) && !isNaN(nb)) return na - nb;
-    return a.localeCompare(b);
-  });
-
-  for (const qid of sortedQids) {
-    const s = qStats[qid];
-    const userRate = s.total > 0 ? Math.round(s.userErrors / s.total * 100) : 0;
-    const backendRate = s.total > 0 ? Math.round(s.backendErrors / s.total * 100) : 0;
-    const reasonStr = Object.entries(s.reasons).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}(${v})`).join(', ');
-    summary += `第${qid}题: 手标错误率 ${userRate}% (${s.userErrors}/${s.total}), 后端判错率 ${backendRate}%`;
-    if (reasonStr) summary += `, 常见原因: ${reasonStr}`;
-    summary += '\n';
-  }
-
-  summary += `\n注: "手标错误"=人工标记为错, "后端判错"=AI批改系统判为错。`;
-  return summary;
+  return out;
 }
 
 async function sendAIMessage() {
@@ -1327,7 +1407,7 @@ async function sendAIMessage() {
 
   try {
     const context = buildAIContext();
-    const systemPrompt = `你是一个试卷批改质量分析助手。以下是批改结果的汇总数据，请基于这些数据回答用户的问题。回答请简洁、有数据支撑。\n\n${context}`;
+    const systemPrompt = `你是一个专业的试卷批改质量分析助手。以下是每份卷子逐题的错题详情（题干、学生作答、参考答案、后端纠错、人工错误原因等）。请基于这些数据回答用户的问题。回答请简洁、有数据支撑，可以横向对比不同卷子的同一题。\n\n${context}`;
 
     const resp = await fetch('https://api.deepseek.com/chat/completions', {
       method: 'POST',
