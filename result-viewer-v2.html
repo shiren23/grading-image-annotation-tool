@@ -1,0 +1,1387 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>主观题批改结果查看器</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/contrib/auto-render.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: -apple-system, "PingFang SC", sans-serif; background: #f5f5f7; color: #1d1d1f; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  /* ============ Header ============ */
+  header {
+    height: 56px; background: #fff; border-bottom: 1px solid #d2d2d7;
+    display: flex; align-items: center; gap: 12px; padding: 0 20px;
+    flex-shrink: 0; z-index: 10;
+  }
+  header h1 { font-size: 16px; font-weight: 600; margin: 0 16px 0 0; white-space: nowrap; }
+  header button, header label.btn {
+    font-size: 13px; padding: 6px 12px; border: 1px solid #d2d2d6; border-radius: 6px;
+    background: #fff; cursor: pointer; white-space: nowrap;
+  }
+  header button:hover { background: #f0f0f2; }
+  header button.active { background: #0071e3; color: #fff; border-color: #0071e3; }
+  .stats { font-size: 13px; color: #6e6e73; white-space: nowrap; }
+  .api-key-group { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 12px; }
+  .api-key-group input {
+    font-size: 12px; padding: 5px 8px; border: 1px solid #d2d2d6; border-radius: 6px;
+    width: 180px; font-family: ui-monospace, monospace;
+  }
+
+  /* Zoom toolbar */
+  .zoom-toolbar {
+    display: inline-flex; gap: 4px; padding: 3px;
+    background: #fff; border: 1px solid #d2d2d7; border-radius: 6px;
+    user-select: none;
+  }
+  .zoom-toolbar button {
+    width: 30px; height: 30px; padding: 0;
+    border: 1px solid #e5e5e7; background: #fff; border-radius: 4px;
+    font-size: 14px; cursor: pointer;
+  }
+  .zoom-toolbar button:hover { background: #f0f0f2; }
+  .zoom-toolbar button.active { background: #0071e3; color: #fff; border-color: #0071e3; }
+  .zoom-toolbar .zoom-display {
+    min-width: 48px; padding: 0 6px; height: 30px; line-height: 30px;
+    font-size: 11px; color: #6e6e73; text-align: center;
+  }
+
+  /* ============ Main grid: paper-list | canvas | detail | bar ============ */
+  main {
+    display: grid;
+    grid-template-columns: 200px 1fr 6px var(--col-detail, 360px) 6px var(--col-bar, 300px);
+    flex: 1; min-height: 0;
+  }
+  .resizer { background: #d2d2d7; cursor: col-resize; transition: background .1s; }
+  .resizer:hover, .resizer.active { background: #0071e3; }
+
+  /* ============ Paper list sidebar ============ */
+  .paper-list {
+    background: #fff; border-right: 1px solid #d2d2d7;
+    overflow-y: auto; padding: 8px 0;
+  }
+  .paper-item {
+    display: flex; align-items: center; gap: 8px;
+    padding: 8px 12px; cursor: pointer; font-size: 13px;
+    border-left: 3px solid transparent;
+    transition: background .1s;
+  }
+  .paper-item:hover { background: #f0f0f2; }
+  .paper-item.active { background: rgba(0,113,227,0.08); border-left-color: #0071e3; }
+  .paper-item .dot {
+    width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0;
+  }
+  .paper-item .dot.has-error { background: #ff3b30; }
+  .paper-item .dot.clean { background: #34c759; }
+  .paper-item .dot.no-data { background: #d2d2d7; }
+  .paper-item .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .paper-item .count { font-size: 11px; color: #8e8e93; flex-shrink: 0; }
+  .paper-list-empty { padding: 20px 16px; font-size: 12px; color: #8e8e93; text-align: center; line-height: 1.6; }
+
+  /* ============ Canvas pane ============ */
+  .canvas-pane {
+    background: #ebebed; overflow: auto; padding: 24px;
+    display: flex; align-items: flex-start; justify-content: flex-start;
+    position: relative; cursor: grab;
+  }
+  .canvas-pane.panning { cursor: grabbing; }
+  .canvas-wrap {
+    position: relative; background: #fff; box-shadow: 0 2px 16px rgba(0,0,0,.1);
+    line-height: 0; flex-shrink: 0; margin: 0 auto;
+  }
+  .canvas-wrap img { display: block; width: 100%; height: 100%; }
+  .canvas-empty {
+    position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: #8e8e93; font-size: 14px; text-align: center; line-height: 2;
+  }
+
+  /* Overlay boxes */
+  .box { position: absolute; pointer-events: none; }
+  .box-bbox { border: 2px dashed #af52de; }
+  .box-error {
+    background: rgba(215,0,21,0.35);
+    border: 2px solid #d70015;
+    pointer-events: auto; cursor: pointer;
+    transition: filter .1s;
+  }
+  .box-error:hover { filter: brightness(.85) saturate(1.3); }
+  .box-error.box-active {
+    background: rgba(215,0,21,0.55);
+    border-width: 3px;
+    box-shadow: 0 0 0 2px rgba(215,0,21,.3);
+  }
+  .box-error .err-label {
+    position: absolute; top: -18px; left: 0;
+    font-size: 10px; font-weight: 600; color: #fff;
+    background: #d70015; padding: 1px 5px; border-radius: 3px;
+    white-space: nowrap; pointer-events: none;
+    line-height: 1.4;
+  }
+
+  /* Legend */
+  .legend {
+    position: absolute; top: 12px; right: 12px;
+    background: rgba(255,255,255,.95); border: 1px solid #d2d2d7; border-radius: 8px;
+    padding: 8px 12px; font-size: 12px; line-height: 1.8;
+    z-index: 5;
+  }
+  .legend label { display: flex; align-items: center; cursor: pointer; user-select: none; }
+  .legend input[type="checkbox"] { margin: 0 6px 0 0; }
+  .legend .swatch { display: inline-block; width: 12px; height: 12px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+  .legend .s-error { background: rgba(215,0,21,0.4); border: 1.5px solid #d70015; }
+  .legend .s-bbox { border: 2px dashed #af52de; background: transparent; }
+
+  /* Image tabs */
+  .image-tabs { display: inline-flex; gap: 4px; }
+  .image-tabs button {
+    font-size: 12px; padding: 4px 10px; border: 1px solid #d2d2d6; border-radius: 4px;
+    background: #fff; cursor: pointer;
+  }
+  .image-tabs button.active { background: #0071e3; color: #fff; border-color: #0071e3; }
+
+  /* ============ Detail pane ============ */
+  .detail-pane {
+    background: #fff; border-left: 1px solid #d2d2d7; border-right: 1px solid #d2d2d7;
+    overflow-y: auto; padding: 16px; font-size: 13px;
+  }
+  .detail-empty { color: #8e8e93; font-style: italic; text-align: center; margin-top: 40px; }
+  .detail-section { padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid #f0f0f2; }
+  .detail-section:last-child { border-bottom: none; }
+  .detail-section > h3 {
+    font-size: 11px; font-weight: 600; color: #8e8e93;
+    text-transform: uppercase; letter-spacing: .5px;
+    margin: 0 0 8px 0;
+  }
+
+  .taskid-row {
+    display: flex; align-items: center; gap: 8px;
+    font-family: ui-monospace, SFMono-Regular, monospace; font-size: 12px;
+    background: #f5f5f7; padding: 6px 8px; border-radius: 6px;
+  }
+  .taskid-row .id-text { flex: 1; color: #1d1d1f; word-break: break-all; line-height: 1.4; }
+  .copy-btn {
+    flex-shrink: 0; padding: 4px 10px; font-size: 11px; font-weight: 500;
+    border: 1px solid #d2d2d7; background: #fff; color: #1d1d1f;
+    border-radius: 4px; cursor: pointer;
+  }
+  .copy-btn:hover { background: #f0f0f2; }
+  .copy-btn.copied { background: #34c759; color: #fff; border-color: #34c759; }
+
+  .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 4px 16px; font-size: 13px; }
+  .meta-pair { display: flex; gap: 6px; align-items: baseline; min-width: 0; }
+  .meta-grid .k { color: #8e8e93; flex-shrink: 0; }
+  .meta-grid .v { color: #1d1d1f; min-width: 0; }
+  .meta-grid .v.bad { color: #d70015; }
+  .meta-grid .v.ok { color: #1d8a3f; }
+  .meta-grid .v.user-bad { color: #d70015; font-weight: 600; }
+
+  .fold {
+    background: #fafafa; border-radius: 6px; padding: 8px 10px;
+    font-size: 13px; line-height: 1.5; color: #1d1d1f;
+    white-space: pre-wrap; word-break: break-all;
+  }
+  .fold.collapsed {
+    cursor: pointer;
+    display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .fold.collapsed::after { content: ' 展开 ▼'; color: #0071e3; font-size: 11px; }
+
+  .reason-display {
+    background: #fff5f6; border: 1px solid #ffc7ce; border-radius: 6px;
+    padding: 8px 10px; font-size: 13px;
+  }
+  .reason-display .cat-label { font-weight: 600; color: #d70015; }
+  .reason-display .sub-label { color: #1d1d1f; }
+  .reason-display .comment { color: #6e6e73; margin-top: 4px; font-style: italic; }
+  .reason-empty { color: #8e8e93; font-style: italic; font-size: 12px; padding: 4px 0; }
+
+  /* ============ Bar pane (question chips) ============ */
+  .bar-pane { background: #fff; border-left: 1px solid #d2d2d7; overflow-y: auto; padding: 16px; }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    min-width: 44px; min-height: 44px; padding: 4px 10px;
+    border-radius: 8px; border: 2px solid transparent;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    cursor: pointer; font-size: 13px; font-weight: 500; line-height: 1.2;
+    background: #f5f5f7; color: #1d1d1f;
+    transition: transform .1s;
+  }
+  .chip:hover { transform: translateY(-1px); }
+  .chip .sub { font-size: 10px; font-weight: 400; color: #6e6e73; }
+  .chip.ok { background: #e8f8ed; color: #1d8a3f; }
+  .chip.bad { background: #ffeef0; color: #d70015; }
+  .chip.na { background: #f5f5f7; color: #8e8e93; }
+  .chip.user-bad {
+    background: #d70015; color: #fff; border-color: #d70015;
+    box-shadow: 0 0 0 2px rgba(215,0,21,.25);
+  }
+  .chip.user-bad .sub { color: #ffeef0; }
+  .chip.active { border-color: #0071e3; box-shadow: 0 0 0 2px rgba(0,113,227,.2); }
+
+  .big-card { margin-bottom: 8px; border: 1px solid #e5e5e7; border-radius: 10px; overflow: hidden; }
+  .big-card-header {
+    padding: 10px 12px; background: #fafafa; display: flex; align-items: center; gap: 8px; cursor: pointer;
+  }
+  .big-card-header:hover { background: #f0f0f2; }
+  .big-card-header .qid { font-weight: 600; font-size: 15px; }
+  .big-card-header .qtype { font-size: 11px; padding: 2px 6px; background: #e8e8ed; border-radius: 3px; color: #6e6e73; }
+  .big-card-header .indicator { margin-left: auto; font-size: 13px; }
+  .big-card-header .indicator.ok { color: #34c759; }
+  .big-card-header .indicator.bad { color: #ff3b30; }
+  .big-card-header .indicator.na { color: #8e8e93; }
+  .big-card-body { padding: 10px 12px; border-top: 1px solid #e5e5e7; }
+  .big-card-body .chips { gap: 4px; }
+
+  /* ============ AI Chat floating popup ============ */
+  .ai-fab {
+    position: fixed; bottom: 24px; right: 24px;
+    width: 52px; height: 52px; border-radius: 50%;
+    background: #0071e3; color: #fff; border: none;
+    font-size: 22px; cursor: pointer; z-index: 200;
+    box-shadow: 0 4px 16px rgba(0,113,227,.3);
+    display: flex; align-items: center; justify-content: center;
+    transition: transform .15s;
+  }
+  .ai-fab:hover { transform: scale(1.08); }
+  .ai-chat {
+    position: fixed; bottom: 88px; right: 24px;
+    width: 420px; max-width: calc(100vw - 48px);
+    height: 520px; max-height: calc(100vh - 120px);
+    background: #fff; border-radius: 12px;
+    box-shadow: 0 8px 32px rgba(0,0,0,.2);
+    z-index: 201; display: none; flex-direction: column;
+    overflow: hidden;
+  }
+  .ai-chat.open { display: flex; }
+  .ai-chat-header {
+    padding: 12px 16px; background: #0071e3; color: #fff;
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 14px; font-weight: 600; flex-shrink: 0;
+  }
+  .ai-chat-close { background: none; border: none; color: #fff; cursor: pointer; font-size: 20px; padding: 0 4px; }
+  .ai-chat-messages {
+    flex: 1; overflow-y: auto; padding: 16px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .ai-msg { max-width: 85%; padding: 10px 14px; border-radius: 12px; font-size: 13px; line-height: 1.5; }
+  .ai-msg.user { align-self: flex-end; background: #0071e3; color: #fff; }
+  .ai-msg.assistant { align-self: flex-start; background: #f0f0f2; color: #1d1d1f; }
+  .ai-msg.assistant pre { white-space: pre-wrap; word-break: break-all; margin: 0; font-family: inherit; }
+  .ai-msg.error { align-self: center; background: #ffeef0; color: #d70015; font-size: 12px; }
+  .ai-chat-welcome { color: #8e8e93; font-size: 12px; text-align: center; padding: 20px; line-height: 1.8; }
+  .ai-typing { align-self: flex-start; color: #8e8e93; font-size: 13px; font-style: italic; padding: 8px 14px; }
+  .ai-chat-input {
+    flex-shrink: 0; padding: 12px 16px; border-top: 1px solid #e5e5e7;
+    display: flex; gap: 8px;
+  }
+  .ai-chat-input textarea {
+    flex: 1; resize: none; border: 1px solid #d2d2d7; border-radius: 8px;
+    padding: 8px 10px; font-size: 13px; font-family: inherit;
+    max-height: 100px; min-height: 38px;
+  }
+  .ai-chat-input textarea:focus { outline: none; border-color: #0071e3; }
+  .ai-chat-input button {
+    padding: 0 16px; border: none; border-radius: 8px;
+    background: #0071e3; color: #fff; font-size: 14px; cursor: pointer;
+    white-space: nowrap;
+  }
+  .ai-chat-input button:disabled { background: #d2d2d7; cursor: not-allowed; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>主观题批改结果查看器</h1>
+  <button id="import-folder-btn" title="导入留痕与详情文件夹">📁 导入文件夹</button>
+  <button id="import-json-btn" title="导入批改结果 JSON">📄 导入 JSON</button>
+  <span id="image-tabs" class="image-tabs"></span>
+  <div class="zoom-toolbar">
+    <button id="zoom-out" title="缩小">−</button>
+    <span class="zoom-display" id="zoom-display">fit</span>
+    <button id="zoom-in" title="放大">+</button>
+    <button id="zoom-fit" title="适应">⤢</button>
+    <button id="zoom-100" title="100%">1:1</button>
+  </div>
+  <span class="stats" id="stats"></span>
+  <div class="api-key-group">
+    <span>🔑 DeepSeek</span>
+    <input type="password" id="api-key-input" placeholder="API Key (本地存储)" autocomplete="off">
+  </div>
+</header>
+
+<main>
+  <aside class="paper-list" id="paper-list">
+    <div class="paper-list-empty">请先导入文件夹<br>和批改结果 JSON</div>
+  </aside>
+
+  <div class="canvas-pane" id="canvas-pane">
+    <div class="canvas-empty" id="canvas-empty">
+      导入文件夹 + JSON 后<br>在此查看卷面
+    </div>
+    <div class="canvas-wrap" id="canvas-wrap" style="display:none">
+      <img id="paper-img">
+      <div class="legend">
+        <label><input type="checkbox" id="show-error" checked><span class="swatch s-error"></span>错误高亮</label>
+        <label><input type="checkbox" id="show-bbox"><span class="swatch s-bbox"></span>题目外框</label>
+      </div>
+    </div>
+  </div>
+
+  <div class="resizer" data-target="detail"></div>
+  <section class="detail-pane" id="detail-pane">
+    <div class="detail-empty">点击卷面红色区域或右侧题号查看详情</div>
+  </section>
+  <div class="resizer" data-target="bar"></div>
+
+  <aside class="bar-pane" id="bar-pane">
+    <div class="detail-empty">导入数据后显示题号</div>
+  </aside>
+</main>
+
+<!-- AI Chat -->
+<button class="ai-fab" id="ai-fab" title="AI 对话" style="display:none">💬</button>
+<div class="ai-chat" id="ai-chat">
+  <div class="ai-chat-header">
+    <span>AI 助手 · 全卷统计</span>
+    <button class="ai-chat-close" id="ai-chat-close">×</button>
+  </div>
+  <div class="ai-chat-messages" id="ai-chat-messages">
+    <div class="ai-chat-welcome" id="ai-chat-welcome">
+      💡 我可以看到所有卷子的汇总统计<br>
+      试着问我「整体情况如何」「哪些题错误率最高」
+    </div>
+  </div>
+  <div class="ai-chat-input">
+    <textarea id="ai-chat-input" placeholder="输入问题…" rows="1"></textarea>
+    <button id="ai-send-btn">发送</button>
+  </div>
+</div>
+
+<script>
+// ============================================================
+//  主观题批改结果查看器 (只读)
+//  双导入: 文件夹(图片+task json) + JSON(user_marks+error_reasons)
+//  按 task_id 自动匹配合并
+// ============================================================
+
+// ---- 数据 ----
+const PAPERS = [];          // { folder, task_id, taskData, imageFiles[] }
+let marksMap = {};          // { task_id: { user_marks, error_reasons } }
+
+const state = {
+  paper: null,
+  paperIdx: 0,
+  imageIdx: 0,
+  imageCount: 0,
+  natW: 0, natH: 0,
+  zoom: 0,
+  isPanning: false,
+  selection: null,       // { qid, subIdx, question }
+  showError: true,
+  showBbox: false,
+  userMarks: {},         // 当前卷子的 marks (从 marksMap 加载,只读)
+  errorReasons: {},      // 当前卷子的 reasons (只读)
+};
+
+const REASON_CATEGORIES = [
+  { id: 'topic', label: '切题', color: '#e74c3c', subtypes: [
+    { id: 'off_topic',     label: '未切出此题' },
+    { id: 'incomplete',    label: '切题不完整' },
+    { id: 'uncut_legend',  label: '未切出图例' },
+  ]},
+  { id: 'ocr', label: 'OCR', color: '#3498db', subtypes: [
+    { id: 'char_wrong',  label: '单字识别错' },
+    { id: 'char_missing',label: '漏字' },
+    { id: 'formula',     label: '公式错' },
+    { id: 'format',      label: '格式/标点' },
+  ]},
+  { id: 'solution', label: '解题', color: '#f39c12', subtypes: [
+    { id: 'logic',      label: '逻辑错' },
+    { id: 'calc',       label: '计算错' },
+    { id: 'formula',    label: '公式错' },
+    { id: 'incomplete', label: '步骤缺失' },
+  ]},
+  { id: 'judgment', label: '判题', color: '#9b59b6', subtypes: [
+    { id: 'wrong_conclusion', label: '对错结论错' },
+    { id: 'score_wrong',      label: '分数错' },
+    { id: 'overlook',         label: '漏判' },
+    { id: 'label_wrong',      label: '标签错误' },
+  ]},
+];
+
+// ---- 工具函数 (复用自 demo-subjective) ----
+function escape(s) {
+  return String(s).replace(/[<>&"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;'}[c]));
+}
+function typesetMath(el) {
+  if (!el || !window.renderMathInElement) return;
+  renderMathInElement(el, {
+    delimiters: [
+      {left: '$$', right: '$$', display: true},
+      {left: '\\[', right: '\\]', display: true},
+      {left: '\\(', right: '\\)', display: false},
+      {left: '$', right: '$', display: false}
+    ],
+    throwOnError: false,
+    ignoredTags: ['script', 'noscript', 'style', 'textarea', 'pre', 'code']
+  });
+}
+
+function markKey(qid, subIdx) {
+  return `${qid}-${subIdx === null || subIdx === undefined ? 'whole' : subIdx}`;
+}
+function getUserMark(qid, subIdx) {
+  return state.userMarks[markKey(qid, subIdx)] || null;
+}
+function getErrorReason(qid, subIdx) {
+  return state.errorReasons[markKey(qid, subIdx)] || null;
+}
+
+function sortedRegions(q) {
+  const regions = q.answer_regions || [];
+  return regions.map((r, origIdx) => {
+    const bx = r.bbox; const xs = bx.map(p => p.x), ys = bx.map(p => p.y);
+    return { image_idx: r.image_idx, bbox: r.bbox, x: Math.min(...xs), y: Math.min(...ys), origIdx };
+  }).sort((a, b) => (a.y - b.y) || (a.x - b.x));
+}
+function sortedAreas(q) {
+  const areas = q.answer_areas || [];
+  return areas.map((a, origIdx) => {
+    const bx = a.bbox; const xs = bx.map(p => p.x), ys = bx.map(p => p.y);
+    return { image_idx: a.image_idx, bbox: a.bbox, x: Math.min(...xs), y: Math.min(...ys), origIdx };
+  }).sort((a, b) => (a.y - b.y) || (a.x - b.x));
+}
+
+function parseBlanksBySubquestion(q) {
+  const text = q.question || '';
+  const blankMatches = [...text.matchAll(/\\underline\{[^}]*\}|_{2,}|＿{2,}/g)];
+  const subQMatches = [...text.matchAll(/\((\d)\)(?!\s*分|·)/g)];
+  if (blankMatches.length === 0) {
+    if (subQMatches.length === 0) return [];
+    const seen = new Set(); const ordered = [];
+    for (const m of subQMatches) { const n = parseInt(m[1]); if (n >= 1 && !seen.has(n)) { seen.add(n); ordered.push(n); } }
+    return ordered.map((subQ, i) => ({ globalIdx: i, subQ, blankInSubQ: 1 }));
+  }
+  const result = [];
+  for (let i = 0; i < blankMatches.length; i++) {
+    const pos = blankMatches[i].index; let subQ = 0;
+    for (let j = subQMatches.length - 1; j >= 0; j--) { if (subQMatches[j].index <= pos) { subQ = parseInt(subQMatches[j][1]); break; } }
+    result.push({ globalIdx: i, subQ, blankInSubQ: 0 });
+  }
+  const counter = {};
+  for (const r of result) { counter[r.subQ] = (counter[r.subQ] || 0) + 1; r.blankInSubQ = counter[r.subQ]; }
+  return result;
+}
+
+function backendStatus(q, subIdx) {
+  const t = q.question_type;
+  const parts = q.is_right_parts || [];
+  if (parts.length === 0) return q.is_right;
+  if (t === '解答题') {
+    const blanks = parseBlanksBySubquestion(q);
+    if (subIdx < blanks.length) { const b = blanks[subIdx]; return parts[Math.min(b.subQ - 1, parts.length - 1)]; }
+    const last = blanks[blanks.length - 1];
+    return last ? parts[Math.min(last.subQ - 1, parts.length - 1)] : q.is_right;
+  }
+  return parts[Math.min(subIdx, parts.length - 1)];
+}
+
+function getChipsData(q, type) {
+  const regions = sortedRegions(q);
+  const parts = q.is_right_parts || [];
+  const blanks = type === '解答题' ? parseBlanksBySubquestion(q) : null;
+  const hasBlanks = blanks && blanks.length > 0;
+  const N = hasBlanks ? Math.max(blanks.length, regions.length) : Math.max(parts.length, regions.length);
+  const chips = [];
+  for (let i = 0; i < N; i++) {
+    let label, backend, subQ = null;
+    if (hasBlanks) {
+      if (i < blanks.length) { const b = blanks[i]; subQ = b.subQ; label = b.blankInSubQ > 1 ? `(${b.subQ}).${b.blankInSubQ}` : `(${b.subQ})`; }
+      else { const last = blanks[blanks.length - 1]; subQ = last ? last.subQ : 1; label = `(${subQ})+`; }
+      backend = parts[Math.min(subQ - 1, parts.length - 1)];
+    } else {
+      if (i < parts.length) { label = `${i + 1}`; backend = parts[i]; }
+      else { label = `${parts.length}+`; backend = parts[parts.length - 1]; }
+    }
+    chips.push({ idx: i, label, backend });
+  }
+  return chips;
+}
+
+function computeChipsForStats(q) {
+  if (q.question_type === '选择题') return [{ subIdx: null, backend: q.is_right }];
+  const chips = getChipsData(q, q.question_type);
+  if (chips.length === 0) return [{ subIdx: null, backend: q.is_right }];
+  return chips.map(c => ({ subIdx: c.idx, backend: c.backend }));
+}
+
+function combinedStatus(q, subIdx) {
+  const u = getUserMark(q.question_id, subIdx);
+  if (u === 'bad') return 'user-bad';
+  const b = backendStatus(q, subIdx);
+  if (b === true) return 'ok';
+  if (b === false) return 'bad';
+  return 'na';
+}
+
+function isActive(qid, subIdx) {
+  return state.selection && state.selection.qid === qid && state.selection.subIdx === subIdx;
+}
+
+// ---- 初始化 ----
+function init() {
+  document.getElementById('import-folder-btn').addEventListener('click', importFolder);
+  document.getElementById('import-json-btn').addEventListener('click', importJson);
+
+  document.getElementById('show-error').addEventListener('change', e => { state.showError = e.target.checked; redrawOverlay(); });
+  document.getElementById('show-bbox').addEventListener('change', e => { state.showBbox = e.target.checked; redrawOverlay(); });
+
+  // API key restore
+  try {
+    const savedKey = localStorage.getItem('deepseek_api_key');
+    if (savedKey) document.getElementById('api-key-input').value = savedKey;
+  } catch(e) {}
+  document.getElementById('api-key-input').addEventListener('change', e => {
+    try { localStorage.setItem('deepseek_api_key', e.target.value); } catch(err) {}
+  });
+
+  setupZoomPan();
+  setupResizers();
+  setupKeyboard();
+  setupAIChat();
+}
+
+// ---- 文件夹导入 ----
+function importFolder() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.webkitdirectory = true;
+  input.multiple = true;
+  input.addEventListener('change', async e => {
+    const files = Array.from(e.target.files || []);
+    if (files.length === 0) return;
+
+    const dirMap = {};
+    for (const f of files) {
+      const path = f.webkitRelativePath || f.name;
+      const parts = path.split('/');
+      parts.pop();
+      const dir = parts.join('/');
+      if (!dir) continue;
+      if (!dirMap[dir]) dirMap[dir] = [];
+      dirMap[dir].push(f);
+    }
+
+    PAPERS.length = 0;
+    for (const dir of Object.keys(dirMap).sort((a, b) => a.localeCompare(b, 'zh', { numeric: true }))) {
+      const fs = dirMap[dir];
+      const taskFile = fs.find(f => /^task_.*\.json$/i.test(f.name));
+      if (!taskFile) continue;
+      const imageFiles = fs
+        .filter(f => /\.(jpg|jpeg|png|webp)$/i.test(f.name))
+        .sort((a, b) => a.name.localeCompare(b.name, 'zh', { numeric: true }));
+      if (imageFiles.length === 0) continue;
+      try {
+        const text = await taskFile.text();
+        const taskData = JSON.parse(text);
+        PAPERS.push({ folder: dir, task_id: taskData.task_id, taskData, imageFiles });
+      } catch (err) {
+        console.warn('解析失败', dir, err);
+      }
+    }
+
+    if (PAPERS.length === 0) {
+      alert('未找到有效数据\n\n请确认选择的是"留痕与详情"目录');
+      return;
+    }
+    mergeMarks();
+    renderPaperList();
+    if (PAPERS.length > 0) loadPaper(0);
+  });
+  input.click();
+}
+
+// ---- JSON 导入 ----
+function importJson() {
+  const input = document.createElement('input');
+  input.type = 'file';
+  input.accept = '.json,application/json';
+  input.addEventListener('change', async e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!data.papers || !Array.isArray(data.papers)) {
+        alert('JSON 格式不对:缺少 papers 数组');
+        return;
+      }
+      marksMap = {};
+      for (const p of data.papers) {
+        if (p.task_id) {
+          marksMap[p.task_id] = {
+            user_marks: p.user_marks || {},
+            error_reasons: p.error_reasons || {},
+          };
+        }
+      }
+      document.getElementById('ai-fab').style.display = 'flex';
+      mergeMarks();
+      renderPaperList();
+      if (state.paperIdx < PAPERS.length) loadPaper(state.paperIdx);
+      alert(`已导入 ${Object.keys(marksMap).length} 份卷子的批改结果`);
+    } catch (err) {
+      alert('JSON 解析失败: ' + err.message);
+    }
+  });
+  input.click();
+}
+
+// ---- 合并 marks 到 PAPERS ----
+function mergeMarks() {
+  for (const p of PAPERS) {
+    const m = marksMap[p.task_id];
+    p.userMarks = m ? m.user_marks : {};
+    p.errorReasons = m ? m.error_reasons : {};
+  }
+}
+
+// ---- 试卷错误数统计 ----
+function paperErrorCount(p) {
+  if (!p.userMarks) return 0;
+  return Object.values(p.userMarks).filter(v => v === 'bad').length;
+}
+
+// ---- 渲染左侧试卷列表 ----
+function renderPaperList() {
+  const pane = document.getElementById('paper-list');
+  if (PAPERS.length === 0) {
+    pane.innerHTML = '<div class="paper-list-empty">请先导入文件夹<br>和批改结果 JSON</div>';
+    return;
+  }
+  pane.innerHTML = '';
+  for (let i = 0; i < PAPERS.length; i++) {
+    const p = PAPERS[i];
+    const isRef = p.folder.includes('参考卷');
+    const errCount = paperErrorCount(p);
+    const hasMarks = !!p.userMarks;
+    const item = document.createElement('div');
+    item.className = 'paper-item' + (i === state.paperIdx ? ' active' : '');
+    const dotClass = !hasMarks ? 'no-data' : errCount > 0 ? 'has-error' : 'clean';
+    const dotIcon = isRef ? '📚' : `<span class="dot ${dotClass}"></span>`;
+    item.innerHTML = `${isRef ? '<span style="font-size:14px">📚</span>' : `<span class="dot ${dotClass}"></span>`}
+      <span class="name">${escape(p.folder)}</span>
+      <span class="count">${hasMarks ? errCount + '错' : '—'}</span>`;
+    item.addEventListener('click', () => loadPaper(i));
+    pane.appendChild(item);
+  }
+}
+
+// ---- 加载卷子 ----
+function loadPaper(idx) {
+  const p = PAPERS[idx];
+  if (!p || !p.taskData) return;
+  state.paper = p.taskData;
+  state.paperIdx = idx;
+  state.userMarks = p.userMarks || {};
+  state.errorReasons = p.errorReasons || {};
+  state.imageCount = p.imageFiles.length;
+  state.imageIdx = 0;
+  state.selection = null;
+  renderPaperList();
+  renderImageTabs();
+  renderImage(0);
+  renderBar();
+  renderStats();
+  renderDetail(null);
+  document.getElementById('canvas-empty').style.display = 'none';
+  document.getElementById('canvas-wrap').style.display = '';
+}
+
+// ---- 图片渲染 ----
+function renderImageTabs() {
+  const tabs = document.getElementById('image-tabs');
+  tabs.innerHTML = '';
+  for (let i = 0; i < state.imageCount; i++) {
+    const btn = document.createElement('button');
+    btn.textContent = `图${i+1}`;
+    if (i === state.imageIdx) btn.classList.add('active');
+    btn.addEventListener('click', () => { state.imageIdx = i; renderImage(i); renderImageTabs(); });
+    tabs.appendChild(btn);
+  }
+}
+
+function renderImage(idx) {
+  const img = document.getElementById('paper-img');
+  const p = PAPERS[state.paperIdx];
+  if (!p || !p.imageFiles || !p.imageFiles[idx]) return;
+  if (state._lastImgUrl) { URL.revokeObjectURL(state._lastImgUrl); state._lastImgUrl = null; }
+  const url = URL.createObjectURL(p.imageFiles[idx]);
+  state._lastImgUrl = url;
+  img.src = url;
+  const pane = document.getElementById('canvas-pane');
+  pane.scrollLeft = 0; pane.scrollTop = 0;
+  img.onload = () => {
+    state.natW = img.naturalWidth;
+    state.natH = img.naturalHeight;
+    applyZoom();
+    redrawOverlay();
+  };
+  redrawOverlay();
+}
+
+// ---- 缩放/平移 ----
+function calcFitZoom() {
+  const pane = document.getElementById('canvas-pane');
+  const w = pane.clientWidth - 48;
+  const h = pane.clientHeight - 48;
+  return Math.max(0.05, Math.min(w / state.natW, h / state.natH));
+}
+function currentZoom() { return state.zoom === 0 ? calcFitZoom() : state.zoom; }
+function applyZoom() {
+  if (!state.natW) return;
+  const z = currentZoom();
+  const wrap = document.getElementById('canvas-wrap');
+  wrap.style.width = (state.natW * z) + 'px';
+  wrap.style.height = (state.natH * z) + 'px';
+  document.getElementById('zoom-display').textContent = state.zoom === 0 ? 'fit' : Math.round(z * 100) + '%';
+  document.getElementById('zoom-fit').classList.toggle('active', state.zoom === 0);
+  document.getElementById('zoom-100').classList.toggle('active', Math.abs(z - 1) < 0.01);
+}
+
+function setupZoomPan() {
+  const pane = document.getElementById('canvas-pane');
+  pane.addEventListener('wheel', e => {
+    if (!state.paper) return;
+    if (e.ctrlKey || e.metaKey) return;
+    e.preventDefault();
+    const oldZoom = currentZoom();
+    const delta = e.deltaY > 0 ? 0.9 : 1.1;
+    const newZoom = Math.max(0.1, Math.min(5, oldZoom * delta));
+    const rect = pane.getBoundingClientRect();
+    const cursorX = e.clientX - rect.left + pane.scrollLeft - pane.clientLeft;
+    const cursorY = e.clientY - rect.top + pane.scrollTop - pane.clientTop;
+    const wrap = document.getElementById('canvas-wrap');
+    const imgX = cursorX - wrap.offsetLeft;
+    const imgY = cursorY - wrap.offsetTop;
+    const ratioX = imgX / wrap.offsetWidth;
+    const ratioY = imgY / wrap.offsetHeight;
+    state.zoom = Math.abs(newZoom - calcFitZoom()) < 0.02 ? 0 : newZoom;
+    applyZoom();
+    const newWrap = document.getElementById('canvas-wrap');
+    pane.scrollLeft = newWrap.offsetLeft + ratioX * newWrap.offsetWidth - (e.clientX - rect.left);
+    pane.scrollTop = newWrap.offsetTop + ratioY * newWrap.offsetHeight - (e.clientY - rect.top);
+    redrawOverlay();
+  }, { passive: false });
+
+  let panStart = null; let panMoved = false;
+  pane.addEventListener('mousedown', e => {
+    if (e.target.closest('.box') || e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+    if (e.button !== 0) return;
+    panStart = { x: e.clientX, y: e.clientY, scrollLeft: pane.scrollLeft, scrollTop: pane.scrollTop };
+    panMoved = false; e.preventDefault();
+  });
+  document.addEventListener('mousemove', e => {
+    if (!panStart) return;
+    const dx = e.clientX - panStart.x; const dy = e.clientY - panStart.y;
+    if (!panMoved && Math.hypot(dx, dy) < 5) return;
+    if (!panMoved) { panMoved = true; pane.classList.add('panning'); }
+    pane.scrollLeft = panStart.scrollLeft - dx;
+    pane.scrollTop = panStart.scrollTop - dy;
+  });
+  document.addEventListener('mouseup', () => {
+    if (panStart) { panStart = null; panMoved = false; pane.classList.remove('panning'); }
+  });
+  pane.addEventListener('dblclick', e => {
+    if (!state.paper) return;
+    if (panStart) { panStart = null; panMoved = false; pane.classList.remove('panning'); }
+    if (e.target.closest('.box') || e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
+    state.zoom = state.zoom === 0 ? 1 : 0;
+    applyZoom(); redrawOverlay();
+  });
+
+  document.getElementById('zoom-in').addEventListener('click', () => {
+    if (!state.paper) return; state.zoom = Math.min(5, currentZoom() * 1.2);
+    if (Math.abs(state.zoom - calcFitZoom()) < 0.02) state.zoom = 0;
+    applyZoom(); redrawOverlay();
+  });
+  document.getElementById('zoom-out').addEventListener('click', () => {
+    if (!state.paper) return; state.zoom = Math.max(0.1, currentZoom() * 0.83);
+    if (Math.abs(state.zoom - calcFitZoom()) < 0.02) state.zoom = 0;
+    applyZoom(); redrawOverlay();
+  });
+  document.getElementById('zoom-fit').addEventListener('click', () => {
+    if (!state.paper) return; state.zoom = 0; applyZoom(); redrawOverlay();
+  });
+  document.getElementById('zoom-100').addEventListener('click', () => {
+    if (!state.paper) return; state.zoom = 1; applyZoom(); redrawOverlay();
+  });
+  window.addEventListener('resize', () => { if (state.zoom === 0) applyZoom(); });
+}
+
+// ---- 分割条 ----
+function setupResizers() {
+  document.querySelectorAll('.resizer').forEach(r => {
+    r.addEventListener('mousedown', e => {
+      e.preventDefault(); r.classList.add('active');
+      const target = r.dataset.target;
+      const startX = e.clientX;
+      const main = document.querySelector('main');
+      const cs = getComputedStyle(main);
+      const cols = cs.gridTemplateColumns.trim().split(/\s+/).map(parseFloat);
+      const startVals = { detail: cols[3] || 360, bar: cols[5] || 300 };
+      document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
+      const onMove = ev => {
+        const dx = ev.clientX - startX;
+        if (target === 'detail') {
+          const newDetail = Math.max(260, startVals.detail + dx);
+          main.style.setProperty('--col-detail', newDetail + 'px');
+        } else if (target === 'bar') {
+          const newBar = Math.max(200, startVals.bar - dx);
+          main.style.setProperty('--col-bar', newBar + 'px');
+        }
+        if (state.zoom === 0) applyZoom();
+      };
+      const onUp = () => {
+        r.classList.remove('active');
+        document.body.style.cursor = ''; document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+  });
+}
+
+// ---- 键盘 (只保留导航) ----
+function setupKeyboard() {
+  document.addEventListener('keydown', e => {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT') return;
+    if (!state.paper) return;
+    if (e.key === 'ArrowLeft') {
+      if (state.imageIdx > 0) { state.imageIdx--; renderImage(state.imageIdx); renderImageTabs(); }
+    } else if (e.key === 'ArrowRight') {
+      if (state.imageIdx < state.imageCount - 1) { state.imageIdx++; renderImage(state.imageIdx); renderImageTabs(); }
+    } else if (e.key === 'Escape') {
+      state.selection = null; renderBar(); renderDetail(null); redrawOverlay();
+    } else if (e.key === '0') {
+      state.zoom = 0; applyZoom(); redrawOverlay();
+    } else if (e.key === '1') {
+      state.zoom = 1; applyZoom(); redrawOverlay();
+    } else if (e.key === '+' || e.key === '=') {
+      state.zoom = Math.min(5, currentZoom() * 1.2); applyZoom(); redrawOverlay();
+    } else if (e.key === '-') {
+      state.zoom = Math.max(0.1, currentZoom() * 0.83); applyZoom(); redrawOverlay();
+    }
+  });
+}
+
+// ---- 叠加层渲染 (只高亮错误) ----
+function redrawOverlay() {
+  const wrap = document.getElementById('canvas-wrap');
+  wrap.querySelectorAll('.box').forEach(el => el.remove());
+  if (!state.paper || !state.natW) return;
+
+  const selQid = state.selection && state.selection.qid;
+  const selSubIdx = state.selection && state.selection.subIdx;
+
+  // 1. 题目外框(可选)
+  if (state.showBbox) {
+    for (const q of state.paper.result) {
+      for (const b of (q.bbox || [])) {
+        if (b.image_idx !== state.imageIdx) continue;
+        drawBox(wrap, b.bbox, 'box box-bbox');
+      }
+    }
+  }
+
+  // 2. 错误高亮 — 只画 userMarks === 'bad' 的 region/area
+  if (state.showError) {
+    for (const q of state.paper.result) {
+      const parts = q.is_right_parts || [];
+      const blanks = q.question_type === '解答题' ? parseBlanksBySubquestion(q) : null;
+      const useSubIdx = blanks ? true : (q.question_type !== '选择题' && parts.length > 1);
+      const chipsData = useSubIdx ? getChipsData(q, q.question_type) : null;
+      const maxChipIdx = chipsData ? chipsData.length - 1 : 0;
+
+      // regions
+      const regions = sortedRegions(q);
+      for (let i = 0; i < regions.length; i++) {
+        const r = regions[i];
+        if (r.image_idx !== state.imageIdx) continue;
+        const subIdx = useSubIdx ? Math.min(i, maxChipIdx) : null;
+        if (getUserMark(q.question_id, subIdx) !== 'bad') continue;
+        const isSel = q.question_id === selQid && (subIdx === selSubIdx || (subIdx !== null && selSubIdx !== null && Math.min(subIdx, maxChipIdx) === Math.min(selSubIdx, maxChipIdx)));
+        let cls = 'box box-error' + (isSel ? ' box-active' : '');
+        const reason = getErrorReason(q.question_id, subIdx);
+        const label = reason && reason.category ? reasonLabel(reason.category, reason.subtype) : '错';
+        const box = drawBox(wrap, r.bbox, cls);
+        if (box) {
+          box.dataset.qid = q.question_id;
+          box.dataset.subIdx = subIdx === null ? '' : String(subIdx);
+          const lbl = document.createElement('div');
+          lbl.className = 'err-label';
+          lbl.textContent = `${q.question_id} · ${label}`;
+          box.appendChild(lbl);
+          box.addEventListener('click', e => {
+            e.stopPropagation();
+            const si = box.dataset.subIdx === '' ? null : parseInt(box.dataset.subIdx);
+            selectQuestion(q, si);
+          });
+        }
+      }
+
+      // areas (如果 region 为空，用 area)
+      if (regions.length === 0) {
+        const areas = sortedAreas(q);
+        for (let i = 0; i < areas.length; i++) {
+          const a = areas[i];
+          if (a.image_idx !== state.imageIdx) continue;
+          const subIdx = useSubIdx ? Math.min(i, maxChipIdx) : null;
+          if (getUserMark(q.question_id, subIdx) !== 'bad') continue;
+          const isSel = q.question_id === selQid && (subIdx === selSubIdx || (subIdx !== null && selSubIdx !== null));
+          let cls = 'box box-error' + (isSel ? ' box-active' : '');
+          const reason = getErrorReason(q.question_id, subIdx);
+          const label = reason && reason.category ? reasonLabel(reason.category, reason.subtype) : '错';
+          const box = drawBox(wrap, a.bbox, cls);
+          if (box) {
+            box.dataset.qid = q.question_id;
+            box.dataset.subIdx = subIdx === null ? '' : String(subIdx);
+            const lbl = document.createElement('div');
+            lbl.className = 'err-label';
+            lbl.textContent = `${q.question_id} · ${label}`;
+            box.appendChild(lbl);
+            box.addEventListener('click', e => {
+              e.stopPropagation();
+              const si = box.dataset.subIdx === '' ? null : parseInt(box.dataset.subIdx);
+              selectQuestion(q, si);
+            });
+          }
+        }
+      }
+
+      // 整题级标记 (subIdx === null) — 当没有 region/area 时也画 bbox
+      if (regions.length === 0 && sortedAreas(q).length === 0 && getUserMark(q.question_id, null) === 'bad') {
+        for (const b of (q.bbox || [])) {
+          if (b.image_idx !== state.imageIdx) continue;
+          const isSel = q.question_id === selQid && selSubIdx === null;
+          let cls = 'box box-error' + (isSel ? ' box-active' : '');
+          const reason = getErrorReason(q.question_id, null);
+          const label = reason && reason.category ? reasonLabel(reason.category, reason.subtype) : '错';
+          const box = drawBox(wrap, b.bbox, cls);
+          if (box) {
+            box.dataset.qid = q.question_id;
+            box.dataset.subIdx = '';
+            const lbl = document.createElement('div');
+            lbl.className = 'err-label';
+            lbl.textContent = `${q.question_id} · ${label}`;
+            box.appendChild(lbl);
+            box.addEventListener('click', e => {
+              e.stopPropagation();
+              selectQuestion(q, null);
+            });
+          }
+        }
+      }
+    }
+  }
+}
+
+function reasonLabel(catId, subtypeId) {
+  const cat = REASON_CATEGORIES.find(c => c.id === catId);
+  if (!cat) return catId;
+  if (!subtypeId) return cat.label;
+  const sub = cat.subtypes.find(s => s.id === subtypeId);
+  return sub ? `${cat.label}/${sub.label}` : cat.label;
+}
+
+function drawBox(parent, bboxPoints, cls) {
+  if (!bboxPoints || bboxPoints.length === 0) return null;
+  const xs = bboxPoints.map(p => p.x), ys = bboxPoints.map(p => p.y);
+  if (!xs.length || !ys.length) return null;
+  const x1 = Math.min(...xs), x2 = Math.max(...xs);
+  const y1 = Math.min(...ys), y2 = Math.max(...ys);
+  if (!state.natW || !state.natH) return null;
+  const div = document.createElement('div');
+  div.className = cls;
+  div.style.left = (x1 / state.natW * 100) + '%';
+  div.style.top = (y1 / state.natH * 100) + '%';
+  div.style.width = ((x2 - x1) / state.natW * 100) + '%';
+  div.style.height = ((y2 - y1) / state.natH * 100) + '%';
+  parent.appendChild(div);
+  return div;
+}
+
+// ---- 选中题 ----
+function selectQuestion(q, subIdx) {
+  state.selection = { qid: q.question_id, subIdx, question: q };
+  // 跳转到对应图
+  let targetImg = 0;
+  if (subIdx !== null) {
+    const regions = sortedRegions(q);
+    const areas = sortedAreas(q);
+    if (regions.length > 0) targetImg = regions[Math.min(subIdx, regions.length - 1)].image_idx;
+    else if (areas.length > 0) targetImg = areas[Math.min(subIdx, areas.length - 1)].image_idx;
+  }
+  if (q.bbox && q.bbox[0]) targetImg = q.bbox[0].image_idx;
+  if (targetImg !== state.imageIdx) {
+    state.imageIdx = targetImg;
+    renderImage(targetImg);
+    renderImageTabs();
+  } else {
+    redrawOverlay();
+  }
+  renderBar();
+  renderDetail(state.selection);
+}
+
+// ---- 统计 ----
+function renderStats() {
+  if (!state.paper) { document.getElementById('stats').textContent = ''; return; }
+  let okN = 0, badN = 0, userBadN = 0, reasonN = 0, total = 0;
+  for (const q of state.paper.result) {
+    const units = computeChipsForStats(q);
+    total += units.length;
+    for (const u of units) {
+      const uMark = getUserMark(q.question_id, u.subIdx);
+      const reason = getErrorReason(q.question_id, u.subIdx);
+      if (reason && reason.category) reasonN++;
+      if (uMark === 'bad') { userBadN++; continue; }
+      if (u.backend === true) okN++;
+      else if (u.backend === false) badN++;
+    }
+  }
+  document.getElementById('stats').textContent =
+    `共 ${total}: ✓${okN} ✗${badN}${userBadN > 0 ? ` ✗手${userBadN}` : ''}${reasonN > 0 ? ` 原因${reasonN}` : ''}`;
+}
+
+// ---- Bar 渲染 ----
+function renderBar() {
+  const pane = document.getElementById('bar-pane');
+  if (!state.paper) { pane.innerHTML = '<div class="detail-empty">导入数据后显示题号</div>'; return; }
+  pane.innerHTML = '';
+  const qs = [...(state.paper.result || [])].sort((a, b) => {
+    const ai = parseInt(a.question_id), bi = parseInt(b.question_id);
+    if (isNaN(ai) || isNaN(bi)) return String(a.question_id).localeCompare(String(b.question_id));
+    return ai - bi;
+  });
+  const wrap = document.createElement('div');
+  wrap.className = 'chips';
+  for (const q of qs) {
+    if (q.question_type === '选择题') {
+      wrap.appendChild(renderChoiceChip(q));
+    } else {
+      wrap.appendChild(renderSubjectiveCard(q, q.question_type));
+    }
+  }
+  pane.appendChild(wrap);
+}
+
+function renderChoiceChip(q) {
+  const chip = document.createElement('div');
+  const status = combinedStatus(q, null);
+  chip.className = 'chip ' + status;
+  const sym = status === 'user-bad' ? '✗' : status === 'ok' ? '✓' : status === 'bad' ? '✗' : '—';
+  const sub = status === 'user-bad' ? '手标' : '';
+  chip.innerHTML = `<div>${q.question_id || '?'}</div><div class="sub">${sym}${sub ? ' ' + sub : ''}</div>`;
+  chip.addEventListener('click', () => selectQuestion(q, null));
+  if (isActive(q.question_id, null)) chip.classList.add('active');
+  return chip;
+}
+
+function renderSubjectiveCard(q, type) {
+  const card = document.createElement('div');
+  card.className = 'big-card';
+  card.style.flexBasis = '100%';
+  const chipsData = getChipsData(q, type);
+  const unitCount = chipsData.length;
+  const allRight = unitCount > 0 && chipsData.every(c => c.backend === true);
+  const allFalse = unitCount > 0 && chipsData.every(c => c.backend === false);
+  const indicator = allRight ? '✓ 全对' : allFalse ? '✗ 全错' : unitCount > 0 ? '— 部分' : (q.is_right === true ? '✓' : q.is_right === false ? '✗' : '—');
+  const indClass = allRight ? 'ok' : allFalse ? 'bad' : 'na';
+  const countLabel = unitCount > 0 ? `${unitCount} 空` : '整题级';
+
+  const header = document.createElement('div');
+  header.className = 'big-card-header';
+  header.innerHTML = `<span class="qid">第 ${q.question_id || '?'} 题</span><span class="qtype">${type}</span><span style="font-size:12px;color:#6e6e73">${countLabel}</span><span class="indicator ${indClass}">${indicator}</span>`;
+  card.appendChild(header);
+
+  const body = document.createElement('div');
+  body.className = 'big-card-body';
+  const innerChips = document.createElement('div');
+  innerChips.className = 'chips';
+
+  const renderChip = (idx, label, backend) => {
+    const chip = document.createElement('div');
+    const status = combinedStatus(q, idx);
+    chip.className = 'chip ' + status;
+    const sym = status === 'user-bad' ? '✗' : backend === true ? '✓' : backend === false ? '✗' : '—';
+    const sub = status === 'user-bad' ? '手标' : '';
+    chip.innerHTML = `<div>${label}</div><div class="sub">${sym}${sub ? ' ' + sub : ''}</div>`;
+    chip.addEventListener('click', () => selectQuestion(q, idx));
+    if (isActive(q.question_id, idx)) chip.classList.add('active');
+    innerChips.appendChild(chip);
+  };
+
+  if (unitCount === 0) {
+    renderChip(null, '整题', q.is_right);
+  } else {
+    chipsData.forEach(({ idx, label, backend }) => renderChip(idx, label, backend));
+  }
+  body.appendChild(innerChips);
+  card.appendChild(body);
+  return card;
+}
+
+// ---- 详情面板 (只读) ----
+function renderDetail(sel) {
+  const pane = document.getElementById('detail-pane');
+  if (!sel) {
+    pane.innerHTML = '<div class="detail-empty">点击卷面红色区域或右侧题号查看详情</div>';
+    return;
+  }
+  const { question: q, subIdx } = sel;
+  const taskId = PAPERS[state.paperIdx].task_id;
+  const bStatus = backendStatus(q, subIdx);
+  const uMark = getUserMark(q.question_id, subIdx);
+  const reason = getErrorReason(q.question_id, subIdx);
+
+  const refAns = (q.final_right_answer || '').split(';');
+  const usrAns = (q.user_final_answer || '').split(';');
+  const ansIdx = subIdx !== null && refAns.length > 0 ? Math.min(subIdx, refAns.length - 1) : -1;
+  const refText = (ansIdx >= 0 ? (refAns[ansIdx] || '') : (q.final_right_answer || '')).trim();
+  const usrText = (ansIdx >= 0 ? (usrAns[ansIdx] || '') : (q.user_final_answer || '')).trim();
+  const qfull = (q.question || '').replace(/\n+/g, ' ').trim();
+  const bText = bStatus === true ? '✓ 对' : bStatus === false ? '✗ 错' : '— 未判定';
+  const bClass = bStatus === true ? 'ok' : bStatus === false ? 'bad' : '';
+  const parts = q.is_right_parts || [];
+  const chipsData = (q.question_type === '解答题' || q.question_type === '填空题') ? getChipsData(q, q.question_type) : null;
+  const unitCount = chipsData ? chipsData.length : parts.length;
+  const curChip = chipsData && subIdx !== null ? chipsData[subIdx] : null;
+
+  let html = '';
+  // Task ID
+  html += `<div class="detail-section"><h3>Task ID</h3>
+    <div class="taskid-row"><span class="id-text">${escape(taskId)}</span><button class="copy-btn" id="copy-taskid">复制</button></div></div>`;
+
+  // 元信息
+  const isMarked = uMark === 'bad';
+  html += `<div class="detail-section"><h3>元信息</h3><div class="meta-grid">
+    <div class="meta-pair"><span class="k">题号</span><span class="v">第 ${escape(q.question_id || '?')} 题</span></div>
+    <div class="meta-pair"><span class="k">题型</span><span class="v">${escape(q.question_type || '?')}</span></div>
+    <div class="meta-pair"><span class="k">后端判定</span><span class="v ${bClass}">${bText}</span></div>
+    ${subIdx !== null ? `<div class="meta-pair"><span class="k">单元</span><span class="v">${subIdx + 1} / ${unitCount}${curChip ? ' · ' + curChip.label : ''}</span></div>` : ''}
+    ${isMarked ? '<div class="meta-pair"><span class="k">用户标记</span><span class="v user-bad">✗ 手标错</span></div>' : ''}
+  </div></div>`;
+
+  // 题干
+  if (qfull) {
+    html += `<div class="detail-section"><h3>题干</h3>
+      <div class="fold ${qfull.length > 12 ? 'collapsed' : ''}" data-fold="q">${escape(qfull)}</div></div>`;
+  }
+
+  // 参考答案 + 学生作答
+  html += `<div class="detail-section"><h3>该空详情</h3>
+    <div style="font-size:11px;color:#8e8e93;margin-bottom:4px">参考答案</div>
+    <div class="fold ${refText.length > 12 ? 'collapsed' : ''}" data-fold="ref">${refText ? escape(refText) : '<span class="reason-empty">(空)</span>'}</div>
+    <div style="font-size:11px;color:#8e8e93;margin:8px 0 4px">学生作答</div>
+    <div class="fold ${usrText.length > 12 ? 'collapsed' : ''}" data-fold="usr" ${(bStatus === false || uMark === 'bad') ? 'style="border-left:3px solid #d70015;padding-left:8px"' : ''}>${usrText ? escape(usrText) : '<span class="reason-empty">(空)</span>'}</div>
+  </div>`;
+
+  // 错误原因 (只读展示)
+  html += `<div class="detail-section"><h3>错误原因</h3>`;
+  if (reason && reason.category) {
+    const cat = REASON_CATEGORIES.find(c => c.id === reason.category);
+    const sub = cat ? cat.subtypes.find(s => s.id === reason.subtype) : null;
+    html += `<div class="reason-display">
+      <span class="cat-label">${cat ? cat.label : reason.category}</span>
+      ${sub ? ` → <span class="sub-label">${sub.label}</span>` : ''}
+      ${reason.comment ? `<div class="comment">"${escape(reason.comment)}"</div>` : ''}
+    </div>`;
+  } else {
+    html += `<div class="reason-empty">无错误原因记录</div>`;
+  }
+  html += `</div>`;
+
+  pane.innerHTML = html;
+
+  // 绑定折叠
+  pane.querySelectorAll('.fold.collapsed').forEach(el => {
+    el.addEventListener('click', () => el.classList.toggle('collapsed'));
+  });
+  // 复制 task id
+  const copyBtn = pane.querySelector('#copy-taskid');
+  if (copyBtn) {
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(taskId).then(() => {
+        copyBtn.classList.add('copied'); copyBtn.textContent = '已复制';
+        setTimeout(() => { copyBtn.classList.remove('copied'); copyBtn.textContent = '复制'; }, 1500);
+      });
+    });
+  }
+  typesetMath(pane);
+}
+
+// ============================================================
+//  AI 对话 (DeepSeek API)
+// ============================================================
+function setupAIChat() {
+  const fab = document.getElementById('ai-fab');
+  const chat = document.getElementById('ai-chat');
+  const closeBtn = document.getElementById('ai-chat-close');
+  const sendBtn = document.getElementById('ai-send-btn');
+  const input = document.getElementById('ai-chat-input');
+
+  fab.addEventListener('click', () => chat.classList.toggle('open'));
+  closeBtn.addEventListener('click', () => chat.classList.remove('open'));
+  sendBtn.addEventListener('click', sendAIMessage);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAIMessage(); }
+  });
+}
+
+function buildAIContext() {
+  if (PAPERS.length === 0) return '暂无卷子数据';
+  let summary = `以下是 ${PAPERS.length} 份卷子的批改汇总统计:\n\n`;
+
+  // 按题号统计
+  const qStats = {};
+  for (const paper of PAPERS) {
+    if (!paper.taskData || !paper.taskData.result) continue;
+    const marks = paper.userMarks || {};
+    const reasons = paper.errorReasons || {};
+    for (const q of paper.taskData.result) {
+      const qid = String(q.question_id || '?');
+      if (!qStats[qid]) qStats[qid] = { total: 0, userErrors: 0, backendErrors: 0, reasons: {} };
+      qStats[qid].total++;
+      const chips = computeChipsForStats(q);
+      let hasUserError = false;
+      let hasBackendError = false;
+      for (const chip of chips) {
+        const key = markKey(qid, chip.subIdx);
+        if (marks[key] === 'bad') {
+          hasUserError = true;
+          const reason = reasons[key];
+          if (reason && reason.category) {
+            const rKey = reasonLabel(reason.category, reason.subtype);
+            qStats[qid].reasons[rKey] = (qStats[qid].reasons[rKey] || 0) + 1;
+          }
+        }
+        if (chip.backend === false) hasBackendError = true;
+      }
+      if (hasUserError) qStats[qid].userErrors++;
+      if (hasBackendError) qStats[qid].backendErrors++;
+    }
+  }
+
+  const sortedQids = Object.keys(qStats).sort((a, b) => {
+    const na = parseInt(a), nb = parseInt(b);
+    if (!isNaN(na) && !isNaN(nb)) return na - nb;
+    return a.localeCompare(b);
+  });
+
+  for (const qid of sortedQids) {
+    const s = qStats[qid];
+    const userRate = s.total > 0 ? Math.round(s.userErrors / s.total * 100) : 0;
+    const backendRate = s.total > 0 ? Math.round(s.backendErrors / s.total * 100) : 0;
+    const reasonStr = Object.entries(s.reasons).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}(${v})`).join(', ');
+    summary += `第${qid}题: 手标错误率 ${userRate}% (${s.userErrors}/${s.total}), 后端判错率 ${backendRate}%`;
+    if (reasonStr) summary += `, 常见原因: ${reasonStr}`;
+    summary += '\n';
+  }
+
+  summary += `\n注: "手标错误"=人工标记为错, "后端判错"=AI批改系统判为错。`;
+  return summary;
+}
+
+async function sendAIMessage() {
+  const input = document.getElementById('ai-chat-input');
+  const sendBtn = document.getElementById('ai-send-btn');
+  const messagesEl = document.getElementById('ai-chat-messages');
+  const welcome = document.getElementById('ai-chat-welcome');
+  const question = input.value.trim();
+  if (!question) return;
+
+  const apiKey = document.getElementById('api-key-input').value.trim();
+  if (!apiKey) {
+    appendAIMessage('error', '请先在右上角输入 DeepSeek API Key');
+    return;
+  }
+
+  if (welcome) welcome.remove();
+  appendAIMessage('user', question);
+  input.value = '';
+  input.style.height = 'auto';
+
+  // typing indicator
+  const typing = document.createElement('div');
+  typing.className = 'ai-typing';
+  typing.textContent = '思考中…';
+  messagesEl.appendChild(typing);
+  sendBtn.disabled = true;
+
+  try {
+    const context = buildAIContext();
+    const systemPrompt = `你是一个试卷批改质量分析助手。以下是批改结果的汇总数据，请基于这些数据回答用户的问题。回答请简洁、有数据支撑。\n\n${context}`;
+
+    const resp = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: 'deepseek-v4-pro',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: question },
+        ],
+        stream: false,
+      }),
+    });
+
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(`API ${resp.status}: ${errText.slice(0, 200)}`);
+    }
+    const data = await resp.json();
+    const answer = data.choices && data.choices[0] && data.choices[0].message && data.choices[0].message.content
+      ? data.choices[0].message.content
+      : '(空回复)';
+    typing.remove();
+    appendAIMessage('assistant', answer);
+  } catch (err) {
+    typing.remove();
+    appendAIMessage('error', `请求失败: ${err.message}`);
+  } finally {
+    sendBtn.disabled = false;
+  }
+}
+
+function appendAIMessage(role, content) {
+  const messagesEl = document.getElementById('ai-chat-messages');
+  const msg = document.createElement('div');
+  msg.className = 'ai-msg ' + role;
+  if (role === 'assistant') {
+    // 支持 markdown 代码块
+    const pre = document.createElement('pre');
+    pre.textContent = content;
+    msg.appendChild(pre);
+    typesetMath(msg);
+  } else {
+    msg.textContent = content;
+  }
+  messagesEl.appendChild(msg);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+// ---- 启动 ----
+init();
+</script>
+</body>
+</html>

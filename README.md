@@ -1,96 +1,62 @@
-# 图片批阅标注工具 + 结果查看工具 + 主观题批改工具
+# 批改图片标注工具
 
-本项目包含三个基于浏览器的本地静态网页工具，配合一个迁移脚本，构成完整的「标注 → 查看 → 分析」数据流：
+四个基于浏览器的本地静态网页工具，构成完整的「标注 → 查看 → 分析」工作流。所有数据均在浏览器本地处理，**不会上传到任何服务器**。
 
-1. **图片批阅标注工具** — 用矩形框（bbox）在图片上框选错误位置，每个框绑定一个错误类型和说明。支持导出 ZIP 和 Excel 统计表。
-   **[https://shiren23.github.io/grading-image-annotation-tool/annotation-tool.html](https://shiren23.github.io/grading-image-annotation-tool/annotation-tool.html)**
-2. **标注结果查看工具** — 浏览标注结果，在原图上叠加 bbox，支持字段级编辑错误列表。
-   **[https://shiren23.github.io/grading-image-annotation-tool/result-viewer.html](https://shiren23.github.io/grading-image-annotation-tool/result-viewer.html)**
-3. **主观题批改工具**（新) — 基于 VLM 后端返回的 task json,在卷面答题线上点选/键盘切换标记错空,挂错误原因,导出结构化 JSON 和 Excel 统计表。适合"留痕与详情"格式的卷子(`task_<uuid>.json` + 图片 + metadata.yaml)。
-   **[https://shiren23.github.io/grading-image-annotation-tool/demo-subjective.html](https://shiren23.github.io/grading-image-annotation-tool/demo-subjective.html)**
-4. **迁移脚本** `migrate_legacy_zip.py` — 把旧版（marked_*.jpg + error_info.txt）结果迁移到新 schema。
+## 在线使用
 
-所有数据均在浏览器本地处理，不会上传到任何服务器。
+直接点击链接打开，无需安装：
 
-## 主观题批改工具(demo-subjective.html)
+| 工具 | 用途 | 链接 |
+|------|------|------|
+| **主观题批改工具** | 在卷面上标记错题、挂错误原因、导出结果 | [demo-subjective.html](https://shiren23.github.io/grading-image-annotation-tool/demo-subjective.html) |
+| **主观题批改结果查看器** | 只读浏览批改结果 + AI 对话分析 | [result-viewer-v2.html](https://shiren23.github.io/grading-image-annotation-tool/result-viewer-v2.html) |
+| **图片批阅标注工具** | 用矩形框框选错误位置，导出 ZIP | [annotation-tool.html](https://shiren23.github.io/grading-image-annotation-tool/annotation-tool.html) |
+| **标注结果查看工具** | 浏览 bbox 标注结果，支持编辑 | [result-viewer.html](https://shiren23.github.io/grading-image-annotation-tool/result-viewer.html) |
 
-### 适用场景
+> 推荐 Chrome / Edge / Safari，不需要后端服务。
 
-输入:`留痕与详情` 格式的批阅文件夹,每份卷子一个子目录,包含:
-- `1.jpg`、`2.jpg` ... 卷面扫描图(可多张)
-- `metadata.yaml`(内容不影响工具)
-- `task_<uuid>.json` — VLM 后端返回的题目结构 + 判定结果
+---
 
-### 核心特性
+## 新手入门
 
-- **三栏布局**:左 = 卷面图(可缩放/拖拽/小地图导航),中 = 题目详情 + 错误原因,右 = 题号 bar
-- **按题型差异化**:选择题/综合题整题级,解答题按题干空级,填空题按 parts
-- **两种标记方式**:点答题线、点 chip、键盘 `Enter` — 数据互通
-- **错误原因**:4 大类(切题/OCR/解题/判题)+ 15 子类,单选,带备注
-- **跨学生键盘流**:`↑` `↓` 切空(末尾自动切下一学生),`Enter` 切换错对,`←` `→` 切图,`0`/`1` 切缩放
-- **导出 JSON / Excel**:累积所有已批改卷子的结果,一键导出结构化 JSON 或 Excel 统计表
+### 我该用哪个工具？
 
-### 数据 schema(导出 JSON)
-
-```json
-{
-  "schema": "subjective-grading/1.0",
-  "exported_at": "2026-07-09T...",
-  "paper_count": 3,
-  "papers": [
-    {
-      "paper_idx": 0,
-      "folder": "未匹配/1",
-      "task_id": "8277514d-...",
-      "user_marks": { "5-0": "bad", "5-1": "bad", "1-whole": "bad" },
-      "error_reasons": {
-        "5-0": { "category": "judgment", "subtype": "wrong_conclusion", "comment": "..." }
-      },
-      "committed_at": "2026-07-09T..."
-    }
-  ]
-}
+```
+你的数据长什么样？
+│
+├─ "留痕与详情" 文件夹（含 task_*.json + 卷面图片）
+│   │
+│   ├─ 我想标记错题、批改 → 「主观题批改工具」
+│   │
+│   └─ 我想查看别人批改完的结果 → 「主观题批改结果查看器」
+│
+└─ 普通文件夹（只有图片 + metadata.yaml）
+    │
+    ├─ 我想框选错误位置 → 「图片批阅标注工具」
+    │
+    └─ 我想查看已导出的 ZIP 标注 → 「标注结果查看工具」
 ```
 
-key 格式:`<question_id>-<subIdx>`(subIdx 为 `whole` 表示整题级,数字表示第 N 个空)。
+### 环境要求
 
-### 使用方式
+- 现代浏览器（推荐 **Chrome / Edge**）
+- 不需要安装任何软件
+- 不需要联网（AI 对话功能除外）
 
-**无需起 http server,直接打开网页就能用**:
+---
 
-1. 打开 https://shiren23.github.io/grading-image-annotation-tool/demo-subjective.html
-2. 点击右上角 **📁 导入**
-3. 选择"留痕与详情"目录(整个文件夹,浏览器会读取所有子目录的 task json + 图片)
-4. 工具自动解析,默认显示第一份卷子
+## 主观题批改工具（demo-subjective.html）
 
-也支持本地直接双击 `demo-subjective.html` 打开(浏览器允许 file:// 读 webkitdirectory 选中的文件)。
+### 什么是"留痕与详情"文件夹？
 
-如果导入的是本地数据,所有图片用 blob URL 在内存中加载,**不会上传到任何服务器**。
+这是 VLM 后端自动生成的批阅数据目录，结构如下：
 
-### Excel 大题分组规则
-
-导出 Excel 时,工具会按以下顺序识别“大题”:
-
-1. **优先使用页面右上角手动输入的大题范围**。例如填写 `1-8,9-11,12-16`,表示第一大题为 1-8 题,第二大题为 9-11 题,第三大题为 12-16 题。
-2. 如果本次没有填写,工具会尝试读取浏览器本地保存的上一次分组。
-3. 如果仍然没有分组,工具会从 `task_*.json` 的题目文本中自动识别以 `一、`、`二、`、`三、` 等开头的大题标题,并按这些标题之间的题目范围分组。
-4. 如果自动识别失败,工具会退化为“每个小题单独作为一组”。
-
-为了保证 Excel 统计稳定,推荐在导出前手动填写大题范围,例如:
-
-```text
-1-8,9-11,12-16
-```
-
-### 数据组织要求
-
-导入的文件夹结构示例:
 ```
 留痕与详情/
-├── 参考卷/                  # 可选,工具会自动识别作"参考卷对照"
-│   ├── 1.jpeg ~ 4.jpeg
-│   └── task_<uuid>.json
-└── 未匹配/                  # 学生卷子
+├── 参考卷/                     ← 可选，自动识别作对照用
+│   ├── 1.jpeg ~ 4.jpeg        ← 卷面扫描图
+│   └── task_<uuid>.json       ← VLM 返回的题目结构 + 判定结果
+└── 未匹配/                     ← 学生卷子
     ├── 1/
     │   ├── 1.jpg, 2.jpg
     │   └── task_<uuid>.json
@@ -100,111 +66,127 @@ key 格式:`<question_id>-<subIdx>`(subIdx 为 `whole` 表示整题级,数字表
 
 每个含 `task_*.json` + 图片的子目录会被识别为一份卷子。
 
-## v2 数据模型（error-centric）
+### 使用步骤
 
-每条错误 = 一个 bbox + 一个错误类型 + 一句说明。坐标存在图像像素空间 `[x, y, w, h]`，与显示分辨率解耦。
+**第 1 步：打开工具**
 
-导出 ZIP 结构：
+访问 https://shiren23.github.io/grading-image-annotation-tool/demo-subjective.html
 
-```
-批阅标注结果_2026-06-10T12-00-00.zip
-├── _session.json                              # 会话级元数据
-├── _stats.jsonl                               # 派生统计（一行一错误，便于 grep/jq）
-├── taxonomy.json                              # 分类法快照
-├── db45c6d8-04ed-4a71-a7d2-2179957bd9b4/
-│   ├── annotations/
-│   │   └── default.json                       # 真相源（v2 schema）
-│   └── source.jpg                             # 原图（无栅格化痕迹）
-└── bda0718b-3e30-4cc4-93b1-265eb54a86d2/
-    └── ...
-```
+**第 2 步：导入数据**
 
-`annotations/default.json` 字段定义见 [`docs/schema.md`](docs/schema.md)。
+1. 点击右上角 **📁 导入**
+2. 选择"留痕与详情"目录（整个文件夹，不是单个子目录）
+3. 工具自动解析，默认显示第一份卷子
 
-### 为什么不再有 `error_info.txt` 和 `marked_*.jpg`
+> 也可以本地双击 `demo-subjective.html` 打开（浏览器允许 file:// 读取 webkitdirectory 选中的文件）。
 
-- 自由文本不可结构化分析（grep、jq、SQL 都做不了）
-- 栅格化把位置信息烧死在像素里，无法分离错误对象和原图
-- v2 把它们改成派生视图：原图是真相源，bbox overlay 由 viewer 实时绘制
+**第 3 步：标记错题**
 
-旧数据不会被丢弃——viewer 自动兼容旧格式（双路解析），迁移脚本可以把它们升级到 v2。
+三种标记方式，数据互通：
 
-## 功能特性
+| 方式 | 操作 |
+|------|------|
+| **点答题线** | 直接点击卷面上的答题线区域，切换对/错 |
+| **点题号 chip** | 点击右侧题号栏的数字方块 |
+| **键盘** | `↑` `↓` 切空 → `Enter` 切换对错 |
 
-### 标注工具
+**第 4 步：挂错误原因**
 
-- 🖼️ **任务结构自动识别**：从 `metadata.yaml` 匹配任务编号
-- 🟦 **bbox 框选标注**：左键拖拽框选错误位置，自动绑定预选的错误类型
-- 🏷️ **数据驱动分类**：4 大类（切题/OCR/解题/判题）+ 子类型，由 `taxonomy.js` 配置
-- 💬 **逐错误备注**：每个 bbox 一条 comment
-- ↩️ **撤销/删除**：Z 撤销最后一个，Delete 删选中，Esc 取消绘制
-- 🔢 **Badcase 数量自洽**：错误数 = bbox 数，杜绝对不上账
-- 💾 **localStorage 增量持久化**：刷新不丢，启动时提示恢复未导出标注
-- 🔐 **sha256 完整性校验**：每张原图算 hash，写入 annotation.json（file:// 失败则置 null）
-- 📦 **ZIP 导出**：每图一份 `annotations/default.json` + 原图，不再栅格化
-- 📊 **Excel 导出**：按试卷、错误类型和图片明细生成统计表
+选中错题后，在中间详情面板：
+1. 点选 4 大类之一（切题 / OCR / 解题 / 判题）
+2. 再点选具体子类
+3. 可选：填写备注
 
-### 结果查看工具
+> 快捷键：`1`-`4` 先选大类，再按 `1`-`4` 选子类，自动标记为错。
 
-- 📂 **双路解析**：v2 JSON 优先，自动回退到 legacy txt
-- 🟦 **bbox overlay**：在原图上实时叠加 bbox 矩形，颜色按错误类型分类，带角标序号
-- ✏️ **字段级编辑**：每个错误独立编辑（类型下拉 + 子类型联动 + comment），不再是自由文本
-- 💾 **JSON 导出**：编辑后下载 `annotation.json`（File System Access API 优先，回退普通下载）
-- 🔄 **localStorage 跨会话保留**：旧 key（`gradingReport:`）自动迁移到 `gradingAnnotationV2:`
-- ⌨️ **键盘导航**：上下箭头切换任务（输入框中自动失效）
-- 🙈 **浮动导航可折叠**
+**第 5 步：导出结果**
 
-## 🚀 在线使用（推荐）
+- **📦 导出 JSON** — 导出批改结果（含 user_marks + error_reasons），供查看器使用
+- **📊 导出 Excel** — 导出统计表
 
-三个工具均已通过 **GitHub Pages** 部署，无需下载安装：
+### 快捷键速查
 
-- **标注工具** 👉 [https://shiren23.github.io/grading-image-annotation-tool/annotation-tool.html](https://shiren23.github.io/grading-image-annotation-tool/annotation-tool.html)
-- **结果查看工具** 👉 [https://shiren23.github.io/grading-image-annotation-tool/result-viewer.html](https://shiren23.github.io/grading-image-annotation-tool/result-viewer.html)
-- **主观题批改工具** 👉 [https://shiren23.github.io/grading-image-annotation-tool/demo-subjective.html](https://shiren23.github.io/grading-image-annotation-tool/demo-subjective.html)
+| 快捷键 | 功能 |
+|--------|------|
+| `↑` `↓` | 切换到上/下一个空（末尾自动切下一学生） |
+| `←` `→` | 上一张 / 下一张卷面图 |
+| `,` | 下一张图，末张则切下一学生 |
+| `Enter` / `空格` | 切换当前选中空的对错 |
+| `1` `2` `3` `4` | 选中空后：先选错误大类，再选子类 |
+| `0` | 缩放适应宽度 |
+| `1` | 100% 缩放（未选中空时） |
+| `+` `−` | 放大 / 缩小 |
+| `Esc` | 取消选中 |
 
-> 所有图片和数据均在浏览器本地处理，不会上传到任何服务器。
+### Excel 大题分组
 
-## 快速开始
+导出 Excel 时，按以下顺序识别"大题"：
 
-### 环境要求
+1. **手动输入**（推荐）：页面右上角填写，如 `1-8,9-11,12-16`
+2. 自动读取上次保存的分组
+3. 自动识别题干中的 `一、` `二、` 等大题标题
+4. 退化：每个小题单独一组
 
-- 现代浏览器（推荐 Chrome / Edge / Safari）
-- 不需要后端服务
+---
 
-### 部署方式
+## 主观题批改结果查看器（result-viewer-v2.html）
 
-#### 方式一：在线使用（推荐）
+### 使用步骤
 
-直接打开上面的 GitHub Pages 链接即可。
+**第 1 步：导入两份数据**（都需要）
 
-#### 方式二：本地打开
+| 按钮 | 导入什么 | 获取什么 |
+|------|----------|----------|
+| **📁 导入文件夹** | "留痕与详情"目录 | 卷面图片 + 题目位置 |
+| **📄 导入 JSON** | 批改工具导出的 `主观题批改结果_*.json` | 批改标记 + 错误原因 |
 
-1. 下载仓库中的 `annotation-tool.html`、`result-viewer.html`、`taxonomy.js`
-2. **三个文件必须放在同一目录**（taxonomy.js 通过 `<script>` 标签加载，file:// 下不可用 fetch）
-3. 用浏览器双击打开
+工具按 `task_id` 自动匹配合并。
 
-#### 方式三：本地 HTTP 服务器
+**第 2 步：浏览**
 
-```bash
-cd grading-image-annotation-tool
-python3 -m http.server 8080
-# 访问 http://localhost:8080/annotation-tool.html
-```
+- **左侧**：试卷列表，红点=有错误，绿点=全对
+- **卷面图**：只高亮用户标记为「错」的答题区（红色），点击查看详情
+- **详情面板**：只读展示题号、题型、判定、题干、答案、错误原因
+- **题号栏**：绿=对，红=后端判错，橙=用户手标错，灰=未判定
 
-#### 方式四：部署到任意静态网站托管服务
+**第 3 步：AI 对话分析**（可选）
 
-GitHub Pages / Vercel / Netlify / 任意 Nginx 静态站点均可。
+1. 在页面右上角输入 **DeepSeek API Key**（本地存储，不上传）
+2. 点击右下角 **💬** 按钮打开对话框
+3. AI 能看到所有卷子的汇总统计，可以问：
+   - "整体情况如何？"
+   - "哪些题错误率最高？"
+   - "第 5 题的主要错误原因是什么？"
 
-## 使用说明
+> 模型：`deepseek-v4-pro`，端点 `api.deepseek.com`
 
-### 1. 准备批阅任务文件夹
+### 快捷键
+
+| 快捷键 | 功能 |
+|--------|------|
+| `←` `→` | 上一张 / 下一张卷面图 |
+| `0` | 缩放适应 |
+| `1` | 100% 缩放 |
+| `+` `−` | 放大 / 缩小 |
+| 滚轮 | 以光标为中心缩放 |
+| 双击 | 切换 fit / 100% |
+| 拖拽 | 平移卷面 |
+| `Esc` | 取消选中 |
+
+---
+
+## 图片批阅标注工具（annotation-tool.html）
+
+### 使用步骤
+
+**第 1 步：准备文件夹**
 
 ```
 批阅任务文件夹/
 ├── 未匹配/
 │   ├── 1/
 │   │   ├── 1.jpg
-│   │   └── metadata.yaml      # 包含 task_ids
+│   │   └── metadata.yaml      ← 包含 task_ids
 │   └── ...
 └── 学生卷/
     └── 张三/
@@ -212,95 +194,24 @@ GitHub Pages / Vercel / Netlify / 任意 Nginx 静态站点均可。
         └── metadata.yaml
 ```
 
-`metadata.yaml` 内容示例：
+**第 2 步：导入并标注**
 
-```yaml
-task_ids:
-  - "db45c6d8-04ed-4a71-a7d2-2179957bd9b4"
-```
+1. 打开 [标注工具](https://shiren23.github.io/grading-image-annotation-tool/annotation-tool.html)
+2. 点击「📁 选择文件夹」，选择最外层目录
+3. 在左侧选择错误类型（如「切题」→「答非所问」）
+4. 在图片上**左键拖拽**框选错误位置
+5. 在左侧填写 comment
+6. 「✓ 保存标注」→ 自动跳到下一张
 
-### 2. 加载任务
+**第 3 步：导出与查看**
 
-1. 打开标注工具页面
-2. 点击「📁 选择文件夹」，选择批阅任务文件夹（最外层）
-3. 工具自动扫描子文件夹，匹配图片与 YAML
+1. 点击「📦 导出结果」下载 ZIP
+2. 解压（或直接选解压目录）
+3. 打开 [结果查看工具](https://shiren23.github.io/grading-image-annotation-tool/result-viewer.html)
+4. 选择解压后的目录
+5. 工具自动加载，可浏览/编辑错误详情
 
-### 3. 进行标注
-
-1. 在左侧 taxonomy 选择器点击错误类型（如「切题」→「答非所问」）
-2. 在图片上左键拖拽框选错误位置（框太小会被忽略）
-3. 框选完成后在左侧错误列表填写 comment
-4. 一个图可以画多个 bbox，每个绑定不同的错误类型
-5. Z 撤销最后一个，Delete 删选中，Esc 取消绘制中
-
-### 4. 保存或跳过
-
-- 「✓ 保存标注」（有 bbox 时）— 保存并自动跳到下一张
-- 「→ 跳过此图」（无 bbox 时）— 标记 skipped 并跳过
-
-### 5. 导出结果
-
-点击右上角「📦 导出结果」下载 ZIP（结构见上文「v2 数据模型」）。
-
-### 6. 用查看工具浏览
-
-1. 解压 ZIP（或直接选择解压目录）
-2. 打开 `result-viewer.html`
-3. 「选择文件夹」→ 选中解压后的目录
-4. 工具自动加载，左侧任务列表 + 中间图片（带 bbox overlay）+ 右侧错误详情
-5. 「✏️ 编辑」可字段级编辑错误列表（添加/删除/改类型/改 comment）
-6. 「💾 下载」生成新的 `annotation.json`（Chrome/Edge 可直接覆盖原文件）
-
-## 旧数据迁移
-
-如果你有旧版的 `marked_*.jpg + error_info.txt` 结果，用迁移脚本升级到 v2：
-
-```bash
-# 目录形式（就地迁移）
-python3 migrate_legacy_zip.py 批阅标注结果_xxx/
-
-# ZIP 形式（输出新 ZIP）
-python3 migrate_legacy_zip.py 批阅标注结果_xxx.zip --output result_v2.zip
-
-# 干跑（只打印 diff，不写盘）
-python3 migrate_legacy_zip.py 批阅标注结果_xxx/ --dry-run
-```
-
-迁移行为：
-
-- `marked_*.jpg` → 复制为 `source.<ext>`
-- `error_info.txt` 的 reasons → 映射到 taxonomy 的 category id，写入 `annotations/default.json`
-- **bbox 字段为 null**（位置信息已栅格化、无法恢复），comment 标注「历史数据，位置信息未保留」
-- 删除 `error_info.txt` 和 `task_id.txt`（信息已进 JSON）
-- 计算 `source.<ext>` 的 sha256
-
-reason → category 映射见 `reason_map.yaml`。
-
-## 分类法自定义
-
-`taxonomy.json` / `taxonomy.js` 定义错误分类。修改后两个工具会同步使用新分类（annotation-tool 用 .js 因为 file:// 不支持 fetch，viewer 同理）。
-
-```json
-{
-  "version": "1.0",
-  "categories": [
-    {"id": "topic", "label": "切题", "color": "#e74c3c", "subtypes": [
-      {"id": "off_topic", "label": "答非所问"},
-      {"id": "incomplete", "label": "未覆盖要点"}
-    ]},
-    {"id": "ocr", "label": "OCR", "color": "#3498db", "subtypes": [...]},
-    {"id": "solution", "label": "解题", "color": "#f39c12", "subtypes": [...]},
-    {"id": "judgment", "label": "判题", "color": "#9b59b6", "subtypes": [...]}
-  ],
-  "severity_levels": [1, 2, 3]
-}
-```
-
-修改后两个文件需保持同步（taxonomy.js 是 `window.TAXONOMY = {...}` 包装版）。
-
-## 快捷键
-
-### 标注工具
+### 快捷键
 
 | 快捷键 | 功能 |
 |--------|------|
@@ -310,51 +221,114 @@ reason → category 映射见 `reason_map.yaml`。
 | `Esc` | 取消绘制中 |
 | `S` / `Enter` | 保存 / 跳过 |
 
-### 结果查看工具
+---
 
-| 快捷键 | 功能 |
-|--------|------|
-| `↑` `↓` `←` `→` | 切换任务（输入框中失效） |
+## 错误分类法
+
+主观题批改工具和图片标注工具共用 4 大类错误分类：
+
+| 大类 | 颜色 | 子类 |
+|------|------|------|
+| **切题** | 🔴 红 | 未切出此题、切题不完整、未切出图例 |
+| **OCR** | 🔵 蓝 | 单字识别错、漏字、公式错、格式/标点 |
+| **解题** | 🟠 橙 | 逻辑错、计算错、公式错、步骤缺失 |
+| **判题** | 🟣 紫 | 对错结论错、分数错、漏判、标签错误 |
+
+图片标注工具的分类法由 `taxonomy.json` / `taxonomy.js` 定义，修改后两个文件需保持同步（`.js` 是 `window.TAXONOMY = {...}` 包装版）。
+
+---
+
+## 部署方式
+
+### 方式一：在线使用（推荐）
+
+直接打开上面的 GitHub Pages 链接。
+
+### 方式二：本地打开
+
+1. 下载 `annotation-tool.html`、`result-viewer.html`、`taxonomy.js`（三个文件必须放同一目录）
+2. 浏览器双击打开
+
+### 方式三：本地 HTTP 服务器
+
+```bash
+python3 -m http.server 8080
+# 访问 http://localhost:8080/annotation-tool.html
+```
+
+### 方式四：部署到静态托管
+
+GitHub Pages / Vercel / Netlify / Nginx 均可。
+
+---
+
+## 常见问题（FAQ）
+
+### Q：导入后什么都没显示？
+
+检查文件夹结构：
+- 主观题工具：每个子目录必须有 `task_*.json` + 至少一张图片（jpg/png）
+- 标注工具：每个子目录必须有 `metadata.yaml` + 图片
+
+### Q：数据会上传到服务器吗？
+
+**不会。** 所有图片和数据均在浏览器本地处理。图片用 Blob URL 在内存中加载，不经过任何服务器。
+
+### Q：刷新页面后数据还在吗？
+
+- **主观题批改工具**：批改结果累积在内存中，刷新会丢失未导出的数据。请及时导出 JSON。
+- **图片标注工具**：使用 localStorage 增量持久化，刷新不丢，启动时提示恢复。
+- **结果查看器**：只读工具，每次打开需要重新导入数据。API Key 存 localStorage。
+
+### Q：主观题查看器的 AI 对话报错？
+
+1. 确认右上角已输入正确的 DeepSeek API Key
+2. 确认网络可以访问 `api.deepseek.com`
+3. API Key 存在浏览器 localStorage，不会上传到本工具的服务器
+
+### Q：Excel 导出的大题分组不对？
+
+在导出前，手动在页面右上角填写大题范围，如 `1-8,9-11,12-16`，表示第一大题为第 1-8 题，第二大题为第 9-11 题。填一次后会记住，下次自动使用。
+
+### Q：file:// 双击打开有什么限制？
+
+- `annotation-tool.html` 的 sha256 计算（SubtleCrypto）可能不可用，`source_hash` 字段会置 null，不影响正常使用
+- `taxonomy.js` 通过 `<script>` 标签加载，必须与 HTML 文件在同一目录
+
+### Q：旧数据（marked_*.jpg + error_info.txt）能用吗？
+
+结果查看工具自动兼容旧格式（双路解析）。如需升级到新格式，用迁移脚本：
+
+```bash
+python3 migrate_legacy_zip.py 批阅标注结果_xxx/         # 就地迁移
+python3 migrate_legacy_zip.py 批阅标注结果_xxx.zip --output result_v2.zip  # 输出新 ZIP
+python3 migrate_legacy_zip.py 批阅标注结果_xxx/ --dry-run  # 只看 diff 不写盘
+```
+
+---
 
 ## 浏览器兼容性
 
-- ✅ Chrome / Edge（推荐，File System Access API 直接覆盖原文件）
+- ✅ **Chrome / Edge**（推荐，支持 File System Access API 直接覆盖原文件）
 - ✅ Safari
 - ✅ Firefox（部分 API 降级）
 
-> 注意：file:// 下双击打开时，sha256 计算（SubtleCrypto）可能不可用，annotation.json 的 `source_hash` 字段会置 null，不阻塞导出。
+---
 
 ## 文件说明
 
 | 文件 | 说明 |
 |------|------|
-| `annotation-tool.html` | **标注工具**主页面 |
-| `result-viewer.html` | **结果查看工具**主页面 |
+| `demo-subjective.html` | **主观题批改工具** |
+| `result-viewer-v2.html` | **主观题批改结果查看器** |
+| `annotation-tool.html` | **图片批阅标注工具** |
+| `result-viewer.html` | **标注结果查看工具** |
 | `taxonomy.json` / `taxonomy.js` | 错误分类法（数据 + file:// 兼容包装） |
 | `docs/schema.md` | annotation.json 字段定义 |
-| `migrate_legacy_zip.py` | 旧 ZIP/目录 → v2 schema 迁移脚本 |
-| `reason_map.yaml` | 旧 reasons → 新 category id 映射 |
-| `test_annotation_tool.py` | 标注工具 Playwright 测试（16 项） |
-| `test_result_viewer.py` | 查看工具 Playwright 测试（14 项） |
-| `test_viewer_e2e.py` | 查看工具端到端测试（5 项，含 v2 + legacy 双路径） |
-| `test_migration.py` | 迁移脚本单元测试（7 项） |
-| `test_data/v2_sample/` | v2 schema 样本（含 source.jpg + annotations/default.json） |
-| `test_results/` | 旧版样本（用于测试 legacy 兼容路径） |
-| `README.md` | 本说明文件 |
+| `migrate_legacy_zip.py` | 旧格式迁移脚本 |
+| `test_*.py` | Playwright 自动化测试 |
 
-## 运行测试
-
-```bash
-# 安装 Playwright
-pip3 install playwright
-python3 -m playwright install chromium
-
-# 跑全部测试
-python3 test_annotation_tool.py        # 16 项
-python3 test_result_viewer.py          # 14 项
-python3 test_viewer_e2e.py             # 5 项（真实文件解析）
-python3 test_migration.py              # 7 项（无浏览器依赖）
-```
+---
 
 ## 许可证
 
